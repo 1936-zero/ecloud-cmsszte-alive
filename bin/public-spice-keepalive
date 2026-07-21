@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# public-ecloud SPICE path_B keepalive entry (no secrets dumped).
+# Product line: public ecloud — FORBID jtydn/aijia/:9223.
+# production_claim=false · dual_evidence_ok=false
+set -euo pipefail
+
+# Repo root = parent of bin/ (portable; never hardcode developer paths)
+_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$_BIN_DIR/.." && pwd)}"
+cd "$REPO"
+
+# Optional host override. Empty → Python setup/mint resolves from gateway/cfg.
+HOST="${HOST:-}"
+# plain: secrets path only — never cat/echo contents (path-only logs)
+_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}"
+PLAIN="${PLAIN:-$_CACHE/ecloud-pathb/connectstr.plain}"
+
+# Prefer shipped assets/templates
+_ASSETS_PRE="$REPO/assets/templates/pre"
+_ASSETS_POST="$REPO/assets/templates/post"
+DURABLE_PRE="${DURABLE_PRE:-$_ASSETS_PRE}"
+DURABLE_POST="${DURABLE_POST:-$_ASSETS_POST}"
+PRE="${PRE:-$DURABLE_PRE}"
+POST="${POST:-$DURABLE_POST}"
+
+# legacy /tmp targets for restore-templates (optional local)
+TMP_PRE="${TMP_PRE:-/tmp/t14_100}"
+TMP_POST="${TMP_POST:-/tmp/t14_tls_plain}"
+INTERVAL="${INTERVAL:-300}"
+HEART="${HEART:-60}"
+OUT_DIR="${OUT_DIR:-$REPO/var/public_spice_keepalive}"
+TICKET_MODE="${TICKET_MODE:-zeros}"
+
+usage() {
+  cat <<'EOF'
+public-spice-keepalive — public-ecloud path_B SPICE (claim=false; ban jtydn)
+
+Usage:
+  public-spice-keepalive setup [main.py setup args...]
+  public-spice-keepalive run [main.py args...]
+  public-spice-keepalive dry-check
+  public-spice-keepalive mint [--plain PATH] [--host H]
+  public-spice-keepalive restore-templates [pre_dst post_dst]
+  public-spice-keepalive bootstrap [main.py args...]
+
+Env overrides: HOST PLAIN PRE POST INTERVAL HEART OUT_DIR REPO TICKET_MODE
+Hard pins: production_claim=false dual_evidence_ok=false forbid jtydn/aijia
+No official client install required for setup/mint/path_B product path.
+EOF
+}
+
+_cmd_setup() {
+  if ! _templates_ok; then
+    echo "setup: templates incomplete under $PRE / $POST — try: $0 restore-templates" >&2
+    _cmd_restore_templates "$PRE" "$POST" 2>/dev/null || true
+  fi
+  local host_args=()
+  [[ -n "$HOST" ]] && host_args=(--host "$HOST")
+  exec python3 main.py setup --plain "$PLAIN" "${host_args[@]}" "$@"
+}
+
+_cmd_mint() {
+  local plain_path="$PLAIN" host_path="$HOST"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --plain) plain_path="$2"; shift 2 ;;
+      --host) host_path="$2"; shift 2 ;;
+      *) echo "unknown mint arg: $1" >&2; exit 2 ;;
+    esac
+  done
+  python3 - "$plain_path" "$host_path" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, ".")
+from l3.spice_oracle_keepalive_loop import _try_remint_connectstr
+from l3.gateway_config import resolve_gateway
+plain = Path(sys.argv[1])
+host = (sys.argv[2] or "").strip() or resolve_gateway().cag_host
+r = _try_remint_connectstr(plain=plain, host=host, timeout_s=45.0)
+pub = {
+    "ok": bool(r.get("ok")),
+    "error": r.get("error"),
+    "plain_path": str(plain),
+    "plain_exists": plain.is_file(),
+    "plain_bytes": plain.stat().st_size if plain.is_file() else 0,
+    "plain_sha16": r.get("plain_sha16"),
+    "vmid_prefix": r.get("vmid_prefix"),
+    "production_claim": False,
+    "dual_evidence_ok": False,
+}
+print(json.dumps(pub, ensure_ascii=False))
+sys.exit(0 if pub["ok"] else 1)
+PY
+}
+
+_cmd_restore_templates() {
+  local pre_dst="${1:-$TMP_PRE}"
+  local post_dst="${2:-$TMP_POST}"
+  python3 - "$DURABLE_PRE" "$DURABLE_POST" "$pre_dst" "$post_dst" <<'PY'
+import shutil, sys
+from pathlib import Path
+dpre, dpost, ppre, ppost = map(Path, sys.argv[1:5])
+PRE_NAMES = ("f20_C2S_50.bin", "f23_C2S_220.bin", "f26_C2S_116.bin")
+POST_NAMES = (
+    "block_00_C2S_108.bin", "block_01_C2S_4.bin", "block_02_C2S_163.bin",
+    "block_03_S2C_342.bin", "block_04_C2S_4.bin", "block_05_C2S_128.bin",
+)
+ok = True
+for dst_root, src_root, names in ((ppre, dpre, PRE_NAMES), (ppost, dpost, POST_NAMES)):
+    dst_root.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        s, d = src_root / n, dst_root / n
+        if not s.is_file():
+            print(f"MISSING_SRC {s}")
+            ok = False
+            continue
+        shutil.copy2(s, d)
+        print(f"copied {n} -> {d} ({d.stat().st_size}B)")
+print("restore_ok", ok)
+raise SystemExit(0 if ok else 1)
+PY
+}
+
+_templates_ok() {
+  python3 - "$PRE" "$POST" <<'PY'
+from pathlib import Path
+import sys
+pre, post = Path(sys.argv[1]), Path(sys.argv[2])
+PRE_NAMES = ("f20_C2S_50.bin", "f23_C2S_220.bin", "f26_C2S_116.bin")
+POST_NAMES = (
+    "block_00_C2S_108.bin", "block_01_C2S_4.bin", "block_02_C2S_163.bin",
+    "block_03_S2C_342.bin", "block_04_C2S_4.bin", "block_05_C2S_128.bin",
+)
+ok = all((pre / n).is_file() for n in PRE_NAMES) and all((post / n).is_file() for n in POST_NAMES)
+print("pre", pre, "post", post, "ok", ok)
+raise SystemExit(0 if ok else 1)
+PY
+}
+
+_plain_ok() {
+  [[ -f "$PLAIN" ]] && [[ "$(stat -c%s "$PLAIN" 2>/dev/null || echo 0)" -gt 32 ]]
+}
+
+_cmd_dry_check() {
+  echo "REPO=$REPO"
+  echo "HOST=${HOST:-"(from cfg/mint)"}"
+  echo "PLAIN=$PLAIN (path-only; exists=$(_plain_ok && echo yes || echo no))"
+  echo "PRE=$PRE"
+  echo "POST=$POST"
+  echo "OUT_DIR=$OUT_DIR TICKET_MODE=$TICKET_MODE"
+  _templates_ok || {
+    echo "templates: FAIL — need assets/templates or: $0 restore-templates"
+    return 1
+  }
+  echo "templates: OK"
+  echo "production_claim=false dual_evidence_ok=false forbid_jtydn"
+  return 0
+}
+
+_cmd_run() {
+  _templates_ok || {
+    echo "templates missing under PRE/POST" >&2
+    exit 1
+  }
+  local host_args=()
+  [[ -n "$HOST" ]] && host_args=(--host "$HOST")
+  mkdir -p "$OUT_DIR"
+  exec python3 main.py keepalive \
+    "${host_args[@]}" \
+    --plain "$PLAIN" \
+    --pre "$PRE" \
+    --post "$POST" \
+    --interval "$INTERVAL" \
+    --heart-listen "$HEART" \
+    --ticket-mode "$TICKET_MODE" \
+    --session-nudge \
+    --out-dir "$OUT_DIR" \
+    --no-account-ping \
+    "$@"
+}
+
+_cmd_bootstrap() {
+  if ! _templates_ok; then
+    echo "bootstrap: durable templates incomplete at $DURABLE_PRE" >&2
+    exit 1
+  fi
+  if ! _plain_ok; then
+    echo "bootstrap: plain missing/short → mint path=$PLAIN"
+    _cmd_mint --plain "$PLAIN" ${HOST:+--host "$HOST"} || {
+      echo "bootstrap: mint failed" >&2
+      exit 1
+    }
+  else
+    echo "bootstrap: plain present (path-only) bytes=$(stat -c%s "$PLAIN")"
+  fi
+  _cmd_dry_check
+  local has_rounds=0
+  for a in "$@"; do
+    [[ "$a" == "--rounds" ]] && has_rounds=1
+  done
+  if [[ $has_rounds -eq 0 ]]; then
+    _cmd_run --rounds 1 "$@"
+  else
+    _cmd_run "$@"
+  fi
+}
+
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+  ""|-h|--help|help) usage; exit 0 ;;
+  setup) _cmd_setup "$@" ;;
+  run) _cmd_run "$@" ;;
+  dry-check) _cmd_dry_check ;;
+  mint) _cmd_mint "$@" ;;
+  restore-templates) _cmd_restore_templates "$@" ;;
+  bootstrap) _cmd_bootstrap "$@" ;;
+  *)
+    echo "unknown: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

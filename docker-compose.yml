@@ -1,0 +1,21 @@
+services:
+  ecloud-keepalive:
+    build: .
+    image: ecloud-cmsszte-alive:local
+    container_name: ecloud-cmsszte-alive
+    user: "1000:1000"
+    environment:
+      TZ: Asia/Shanghai
+      HOME: /tmp
+      CLOUD_PC_CONFIG_FILE: /app/data/cloud_pc.json
+      # Docker-safe plain (HOME=/ would break ~/.cache); host can docker cp / remint
+      SHORT_CONNECT_PLAIN_FILE: /tmp/r26_t29_plain
+      OUT_DIR: /tmp/ecloud-pathb/reports/spice_oracle_webui
+      # product line pins (never jtydn / aijia)
+      PIN_PRODUCT_LINE: public_ecloud_9222
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8081:8080"
+    restart: unless-stopped
+    command: ["web", "--host", "0.0.0.0", "--port", "8080"]

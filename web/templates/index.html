@@ -1,0 +1,1756 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>公众移动云电脑保活</title>
+<link rel="icon" type="image/png" href="/static/logo.png?v=logo20260721c">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=theme20260721h">
+</head>
+<body>
+
+<!-- Access gate: setup / login before console -->
+<div id="access-gate" class="access-gate hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+  <div class="access-gate-card">
+    <div class="access-gate-brand">
+      <img class="access-gate-logo brand-mark" src="/static/logo.png?v=logo20260721c" width="48" height="48" alt="" />
+      <div>
+        <h1 id="gate-title">设置访问密钥</h1>
+        <p class="access-gate-sub" id="gate-sub">首次部署可选：保护控制台，之后可在顶栏修改。</p>
+      </div>
+    </div>
+    <div id="gate-setup-panel" class="access-gate-panel hidden">
+      <label class="field">
+        <span>访问密钥</span>
+        <div class="field-row">
+          <input type="password" id="gate-setup-input" autocomplete="new-password" placeholder="至少 4 位" />
+          <button type="button" class="btn btn-ghost btn-sm" id="gate-setup-show" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+        </div>
+      </label>
+      <p class="access-gate-err" id="gate-setup-err" aria-live="polite"></p>
+      <div class="access-gate-actions access-gate-actions-setup">
+        <div class="access-gate-actions-row">
+          <button type="button" class="btn btn-ghost" id="gate-setup-gen">随机生成</button>
+          <button type="button" class="btn btn-ghost" id="gate-setup-skip">不设置，直接进入</button>
+        </div>
+        <button type="button" class="btn btn-primary" id="gate-setup-ok">保存并进入</button>
+      </div>
+      <p class="access-gate-note">高级：也可写环境变量 <code>ECLOUD_WEBUI_TOKEN</code> 后重启。</p>
+    </div>
+    <div id="gate-login-panel" class="access-gate-panel hidden">
+      <label class="field">
+        <span>访问密钥</span>
+        <div class="field-row">
+          <input type="password" id="gate-login-input" autocomplete="current-password" placeholder="输入访问密钥" />
+          <button type="button" class="btn btn-ghost btn-sm" id="gate-login-show" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+        </div>
+      </label>
+      <p class="access-gate-err" id="gate-login-err" role="alert" aria-live="polite"></p>
+      <div class="access-gate-actions">
+        <button type="button" class="btn btn-primary" id="gate-login-ok">进入控制台</button>
+      </div>
+      <p class="access-gate-note">密钥仅保存在本浏览器 localStorage，不上传第三方。</p>
+    </div>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <!-- 照抄爱家 index.html topbar：img.brand-mark + logo.png 34×34 -->
+      <img class="brand-mark" src="/static/logo.png?v=logo20260721c" width="34" height="34" alt="公众移动云电脑保活" />
+      <div class="brand-text">
+        <h1>公众移动云电脑保活</h1>
+        <p class="brand-sub">云电脑保活管理台 · 关掉页面仍在后台运行</p>
+      </div>
+    </div>
+    <div class="top-stats" id="top-stats" aria-live="polite">
+      <span class="stat" data-k="total">账号 0</span>
+      <span class="stat stat-run" data-k="running">保活 0</span>
+      <span class="stat" data-k="idle">空闲 0</span>
+      <span class="stat stat-err" data-k="error">异常 0</span>
+    </div>
+    <div class="top-actions">
+      <button type="button" class="btn btn-ghost" id="btn-token" title="访问密钥">密钥</button>
+      <button type="button" class="btn btn-ghost" id="btn-refresh">刷新</button>
+      <button type="button" class="btn btn-ghost" id="btn-help">说明</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="composer" id="composer" aria-label="新建账号">
+      <div class="composer-head">
+        <h2>新建 / 登录账号</h2>
+        <p class="hint" id="c-sms-msg">公众 e 云 Path B（CLI 壳）。账密 → 登录；need_sms 时接口自带手机号并自动发码，你只需填验证码 → 选桌面启动保活。</p>
+      </div>
+
+      <!-- 一行：显示名/间隔/短信/发码同短宽；账密等长；登录后并列验证码+重发+验证 -->
+      <div class="composer-row" id="c-login-row">
+        <label class="field field-sm">
+          <span>显示名</span>
+          <input type="text" id="c-label" placeholder="可选" autocomplete="off" />
+        </label>
+        <label class="field field-sm">
+          <span>间隔(秒)</span>
+          <input type="number" id="c-interval" value="300" min="30" max="3600" title="Path B 保活间隔" />
+        </label>
+        <label class="field field-md">
+          <span>账号 <em>*</em></span>
+          <input type="text" id="c-username" placeholder="公众移动云账号" autocomplete="username" />
+        </label>
+        <label class="field field-md">
+          <span>密码 <em>*</em></span>
+          <input type="password" id="c-password" placeholder="登录密码" autocomplete="current-password" />
+        </label>
+        <div class="field field-btn">
+          <span>&nbsp;</span>
+          <button type="button" class="btn btn-secondary" id="c-login">登录</button>
+        </div>
+        <label class="field field-sm" id="c-sms">
+          <span>验证码</span>
+          <input type="text" id="c-code" placeholder="短信数字" autocomplete="one-time-code" />
+        </label>
+        <div class="field field-btn">
+          <span>&nbsp;</span>
+          <button type="button" class="btn btn-ghost" id="c-send-sms">重发</button>
+        </div>
+        <div class="field field-btn">
+          <span>&nbsp;</span>
+          <button type="button" class="btn btn-primary" id="c-verify-sms">验证</button>
+        </div>
+      </div>
+      <!-- 手机号不占 UI：由 login 接口写入 state.mobile（对齐 CLI result.mobile） -->
+
+      <!-- 常显：未登录时空态；登录后刷 list-desktops -->
+      <div id="c-desktop-wrap" class="desktop-box">
+        <div class="desktop-head">
+          <strong>选择云电脑</strong>
+          <span class="hint">等同 CLI <code>list-desktops</code>。登录成功后点「刷新桌面」或自动列出；选中后再启动保活。</span>
+        </div>
+        <div id="c-desktop-list" class="desktop-list">
+          <p class="hint" id="c-desktop-empty">尚未登录。请先账号密码登录，成功后此处显示桌面列表。</p>
+        </div>
+        <div class="composer-actions">
+          <button type="button" class="btn btn-primary" id="c-start" disabled>启动保活</button>
+          <button type="button" class="btn btn-ghost" id="c-refresh-desktops">刷新桌面</button>
+        </div>
+      </div>
+
+      <p class="composer-err" id="c-err" hidden></p>
+      <p class="composer-ok" id="c-ok" hidden></p>
+    </section>
+
+    <section class="timeline-wrap">
+      <div class="timeline-head">
+        <h2>账号卡片</h2>
+        <p class="hint">一卡一账号：启停 Path B 桌面保活、配置密码/间隔与桌面、日志与删除（账号态随 CLI 自动）。</p>
+      </div>
+      <div class="timeline" id="timeline"></div>
+      <div class="empty" id="empty-state" hidden>
+        <p>还没有账号。上方登录后会自动建卡。</p>
+      </div>
+    </section>
+
+    <section class="global-log-panel" aria-label="运行日志">
+      <div class="panel-head">
+        <h3>运行日志</h3>
+        <div class="panel-head-actions">
+          <button type="button" class="btn btn-ghost" id="btn-open-log-full" title="打开完整日志二级页">完整日志</button>
+          <button type="button" class="btn btn-ghost" id="btn-clear-log">清空</button>
+        </div>
+      </div>
+      <div class="log-box log-viewport" id="global-log" title="双击或点「完整日志」打开二级页" role="log" aria-live="polite"></div>
+      <p class="log-hint">约 6 行外露 · 点「完整日志」或双击打开二级页</p>
+      <p class="sys-info" id="sys-info">公众移动云电脑保活 · WebUI · 关掉页面仍在后台运行</p>
+    </section>
+  </main>
+
+</div>
+
+<!-- full log modal (parity aijia: dblclick #global-log) -->
+<div class="modal log-modal log-full-modal hidden" id="log-full-modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="log-full-title">
+  <div class="modal-card log-full-dialog log-full-card log-modal-card">
+    <div class="log-full-head modal-head">
+      <h2 id="log-full-title" class="log-full-title">完整日志</h2>
+      <button type="button" class="btn btn-ghost modal-x" id="log-full-close" data-close-log-modal="1" aria-label="关闭" title="关闭">×</button>
+    </div>
+    <div class="log-box log-full-body log-full-box" id="log-full-body" data-log-modal-body="1" role="log" aria-live="polite"></div>
+  </div>
+</div>
+
+
+<!-- Token secondary page: change / clear local / disable auth (parity aijia) -->
+<div class="modal hidden" id="token-modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="token-modal-title">
+  <div class="modal-card token-modal-card">
+    <div class="modal-head token-modal-head">
+      <h2 id="token-modal-title">访问密钥</h2>
+      <button type="button" class="btn btn-ghost modal-x token-modal-x" id="token-modal-close" aria-label="关闭">×</button>
+    </div>
+    <p class="token-modal-status" id="token-modal-status">正在读取鉴权状态…</p>
+    <div class="token-modal-field field">
+      <label for="token-modal-current">当前密钥</label>
+      <div class="field-row">
+        <input type="password" id="token-modal-current" autocomplete="current-password" placeholder="本机已保存则自动填充" />
+        <button type="button" class="btn btn-ghost btn-sm" id="token-modal-show-current" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+      </div>
+    </div>
+    <div class="token-modal-field field">
+      <label for="token-modal-new">新密钥（启用/修改时填写）</label>
+      <div class="field-row">
+        <input type="password" id="token-modal-new" autocomplete="new-password" placeholder="至少 4 位" />
+        <button type="button" class="btn btn-ghost btn-sm" id="token-modal-show-new" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+      </div>
+    </div>
+    <div class="token-modal-actions">
+      <button type="button" class="btn btn-primary" id="token-modal-enable">启用 / 修改</button>
+      <button type="button" class="btn btn-secondary" id="token-modal-gen">随机生成</button>
+      <button type="button" class="btn btn-ghost" id="token-modal-clear-local">清除本机密钥</button>
+      <button type="button" class="btn btn-danger" id="token-modal-disable">关闭鉴权</button>
+    </div>
+    <p class="token-modal-err" id="token-modal-err" role="alert"></p>
+    <p class="token-modal-note">启用=用当前/新密钥开鉴权；修改需填新密钥。关闭后任何人可操作；清除本机仅删浏览器保存的密钥。</p>
+  </div>
+</div>
+
+
+<div class="modal hidden" id="config-modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="config-modal-title">
+  <div class="modal-card config-modal-card">
+    <div class="modal-head">
+      <h2 id="config-modal-title">账号配置</h2>
+      <button type="button" class="btn btn-ghost modal-x" id="config-modal-close" aria-label="关闭">×</button>
+    </div>
+    <p class="config-modal-err" id="config-modal-err" role="alert" hidden></p>
+    <div class="config-modal-fields" id="config-modal-body">
+      <!-- filled by JS -->
+    </div>
+    <div class="modal-actions config-modal-actions">
+      <button type="button" class="btn btn-secondary" id="config-modal-login">登录并刷新桌面</button>
+      <button type="button" class="btn btn-primary" id="config-modal-save">保存</button>
+      <button type="button" class="btn btn-ghost" id="config-modal-cancel">取消</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="help-modal" aria-hidden="true">
+  <div class="modal-card">
+    <h3>使用说明</h3>
+    <ul>
+      <li>本页管理<strong>公众移动云电脑</strong> Path B 保活（非爱家线）。</li>
+      <li>上方登录；短信区常显（设备信任/增强策略授权）。</li>
+      <li>卡片「启动」= Path B 桌面保活（账号登录态随 CLI 自动开启）；「停止」同步停保活。</li>
+      <li>关掉浏览器后，已启动的保活仍在服务端后台运行。</li>
+      <li>本页仅做保活管理，关掉浏览器后后台仍运行。</li>
+      <li>可选「访问密钥」：首次可设置，之后顶栏可改/关；请求带 Bearer。</li>
+    </ul>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="help-close">知道了</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TOKEN_KEY = "ecloud_webui_token";
+
+  var state = {
+    accounts: [],
+    currentId: null,
+    loginType: "device_trust",
+    mobile: "", // login 接口返回的手机号（对齐 CLI result.mobile）
+    selectedDesktop: null, // {instance_id, machine_id, name}
+    globalSince: 0,
+    pollTimer: null,
+    tokenRequired: false,
+    setupRequired: false,
+    authEnabled: false,
+    authSource: "",
+    gateMode: ""
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function getToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (_) { return ""; }
+  }
+  function setToken(v) {
+    try {
+      if (v) localStorage.setItem(TOKEN_KEY, v);
+      else localStorage.removeItem(TOKEN_KEY);
+    } catch (_) {}
+  }
+
+  function api(method, path, body) {
+    var opts = {
+      method: method,
+      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+    };
+    var tok = getToken();
+    if (tok) {
+      opts.headers["Authorization"] = "Bearer " + tok;
+      opts.headers["X-API-Token"] = tok;
+    }
+    if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
+    return fetch(path, opts).then(function (r) {
+      return r.json().catch(function () {
+        return { ok: false, error: "非 JSON 响应 HTTP " + r.status, status: r.status };
+      }).then(function (data) {
+        if (data && typeof data === "object") {
+          data._http = r.status;
+          if (r.status === 401 && data.code !== "TOKEN_INVALID") {
+            // normalize
+          }
+          if (r.status === 401) data.ok = false;
+        }
+        return data;
+      });
+    });
+  }
+
+  function showCErr(msg) {
+    var el = $("c-err");
+    var ok = $("c-ok");
+    ok.hidden = true;
+    if (!msg) { el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.textContent = msg;
+  }
+  function showCOk(msg) {
+    var el = $("c-ok");
+    var er = $("c-err");
+    er.hidden = true;
+    if (!msg) { el.hidden = true; el.textContent = ""; return; }
+    el.hidden = false;
+    el.textContent = msg;
+  }
+
+  function fmtKa(ka, defaultMode) {
+    if (!ka) return { running: false, text: "未运行", heart: "-", rounds: "-", mode: defaultMode || "-", error: "" };
+    var running = !!(ka.running || ka.is_running);
+    var heartVal = ka.heart != null ? ka.heart : ka.last_heart_ok;
+    var heartText = heartVal === true ? "True" : (heartVal === false ? "False" : "-");
+    var health = ka.health || "";
+    var text = running
+      ? (health === "ok" ? "运行中" : (health === "error" ? "异常" : "启动中"))
+      : (ka.status || "已停止");
+    return {
+      running: running,
+      text: text,
+      heart: heartText,
+      rounds: ka.rounds != null ? String(ka.rounds) : (ka.round != null ? String(ka.round) : "-"),
+      mode: ka.mode || defaultMode || "-",
+      uptime: ka.last_uptime || ka.desktop_uptime || ka.uptime || "-",
+      error: ka.last_error || ""
+    };
+  }
+
+  function updateTopStats() {
+    var total = state.accounts.length;
+    var running = 0, err = 0;
+    state.accounts.forEach(function (a) {
+      var k = fmtKa(a.keepalive, "path_b");
+      var ak = fmtKa(a.account_keepalive, "account");
+      if (k.running || ak.running) running++;
+      if (k.error || ak.error || a.last_error) err++;
+    });
+    var idle = Math.max(0, total - running);
+    $("top-stats").querySelector('[data-k="total"]').textContent = "账号 " + total;
+    $("top-stats").querySelector('[data-k="running"]').textContent = "保活 " + running;
+    $("top-stats").querySelector('[data-k="idle"]').textContent = "空闲 " + idle;
+    $("top-stats").querySelector('[data-k="error"]').textContent = "异常 " + err;
+  }
+
+
+  // ---- aijia-style card helpers ----
+  if (!state.cardLogs) state.cardLogs = {};
+  if (typeof state.configPid === "undefined") state.configPid = null;
+
+  function refreshAccountLogs(id, toast) {
+    if (!id) return Promise.resolve();
+    return api("GET", "/api/accounts/" + encodeURIComponent(id) + "/logs?limit=40")
+      .then(function (res) {
+        var entries = (res && (res.logs || res.entries || res.items)) || [];
+        if (!Array.isArray(entries) && res && Array.isArray(res)) entries = res;
+        state.cardLogs[id] = entries;
+        applyLogsToDom(id, !!toast);
+        if (toast) showCOk("日志已刷新");
+      })
+      .catch(function (e) {
+        if (toast) showCErr("刷新日志失败: " + e.message);
+      });
+  }
+
+  function openAccountLogFull(id) {
+    state.currentId = id;
+    refreshAccountLogs(id).then(function () {
+      var fullBody = $("log-full-body");
+      var modal = $("log-full-modal");
+      if (!fullBody || !modal) {
+        // fallback: use existing openLogFull if present
+        if (typeof openLogFull === "function") openLogFull();
+        return;
+      }
+      var entries = state.cardLogs[id] || [];
+      fullBody.innerHTML = entries.length
+        ? entries.map(function (line) {
+            var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
+            var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
+            if (lv.indexOf("err") >= 0) lv = "error";
+            else if (lv.indexOf("warn") >= 0) lv = "warn";
+            else lv = "info";
+            var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
+            return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
+          }).join("")
+        : '<div class="log-line">暂无日志</div>';
+      modal.hidden = false;
+      modal.classList.remove("hidden");
+      modal.setAttribute("aria-hidden", "false");
+    });
+  }
+
+  function openConfigModal(id) {
+    var acc = state.accounts.find(function (a) { return a.id === id; });
+    if (!acc) { showCErr("账号不存在"); return; }
+    state.configPid = id;
+    state.currentId = id;
+    var modal = $("config-modal");
+    var body = $("config-modal-body");
+    var err = $("config-modal-err");
+    if (err) { err.hidden = true; err.textContent = ""; }
+    if (!modal || !body) { showCErr("配置弹层缺失"); return; }
+    var intervalSec = acc.keepalive_interval || 300;
+    body.innerHTML =
+      '<label class="field span-2"><span>显示名</span>' +
+        '<input type="text" id="cfg-label" value="' + esc(acc.label || "") + '" /></label>' +
+      '<label class="field"><span>账号</span>' +
+        '<input type="text" id="cfg-username" value="' + esc(acc.username || "") + '" readonly /></label>' +
+      '<label class="field"><span>密码</span>' +
+        '<input type="password" id="cfg-password" autocomplete="new-password" placeholder="' +
+        (acc.has_password ? "已保存，不改请留空" : "请输入密码") + '" value="" /></label>' +
+      '<label class="field span-2"><span>保活间隔（秒，≥30）</span>' +
+        '<input type="number" id="cfg-interval" min="30" max="3600" value="' + esc(String(intervalSec)) + '" /></label>' +
+      '<div class="field span-2"><span>云桌面</span>' +
+        '<div class="field-row">' +
+          '<select id="cfg-desktop" class="cfg-desktop-select"><option value="">加载中…</option></select>' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="cfg-refresh-desktops">刷新</button>' +
+        "</div>" +
+        '<p class="field-hint">未登录时请先点底部「登录并刷新桌面」；need_sms 时用下方验证码</p>' +
+      "</div>" +
+      '<div class="field span-2 cfg-sms-block" id="cfg-sms-block">' +
+        '<span>短信验证（need_sms 时）</span>' +
+        '<div class="field-row">' +
+          '<input type="text" id="cfg-code" placeholder="短信验证码" autocomplete="one-time-code" style="flex:1" />' +
+          '<button type="button" class="btn btn-ghost btn-sm" id="cfg-send-sms">重发</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="cfg-verify-sms">验证</button>' +
+        "</div>" +
+        '<p class="field-hint" id="cfg-sms-hint">手机号由登录接口返回，不占输入位；重发=再次 send</p>' +
+      "</div>";
+    modal.hidden = false;
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+    function fillDesktops(list) {
+      var sel = $("cfg-desktop");
+      if (!sel) return;
+      var cur = acc.instance_id || "";
+      sel.innerHTML = "";
+      if (!list || !list.length) {
+        sel.innerHTML = '<option value="">（无桌面 / 未登录）</option>';
+        return;
+      }
+      list.forEach(function (d) {
+        var opt = document.createElement("option");
+        opt.value = d.instance_id || "";
+        opt.textContent = (d.machine_name || d.instance_id || "?") +
+          (d.status ? " [" + d.status + "]" : "") +
+          (d.vendor ? " · " + d.vendor : "");
+        opt.setAttribute("data-machine-id", d.machine_id || "");
+        opt.setAttribute("data-machine-name", d.machine_name || "");
+        if (d.instance_id === cur) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    function loadDesks() {
+      return api("GET", "/api/accounts/" + encodeURIComponent(id) + "/desktops")
+        .then(function (res) {
+          var list = (res && (res.desktops || res.items)) || [];
+          fillDesktops(list);
+        })
+        .catch(function () { fillDesktops([]); });
+    }
+    loadDesks();
+    var refBtn = $("cfg-refresh-desktops");
+    if (refBtn) refBtn.onclick = function () { loadDesks(); };
+    /* config modal SMS: align composer / CLI send + verify */
+    var sendBtn = $("cfg-send-sms");
+    var verifyBtn = $("cfg-verify-sms");
+    var hint = $("cfg-sms-hint");
+    function cfgMobile() {
+      var a = state.accounts.find(function (x) { return x.id === id; });
+      return (state.mobile && String(state.mobile)) || (a && (a.mobile || a.phone)) || "";
+    }
+    if (sendBtn) sendBtn.onclick = function () {
+      sendBtn.disabled = true;
+      api("POST", "/api/accounts/" + encodeURIComponent(id) + "/send-sms", {})
+        .then(function (res) {
+          if (res && res.ok === false) throw new Error(res.error || res.message || "发码失败");
+          if (res && res.mobile) state.mobile = res.mobile;
+          if (hint) hint.textContent = "已发码" + (res && res.mobile ? (" → " + res.mobile) : "") + "，请填验证码";
+          showCOk("验证码已发送");
+          var left = 60;
+          sendBtn.textContent = left + "s";
+          var timer = setInterval(function () {
+            left--;
+            if (left <= 0) {
+              clearInterval(timer);
+              sendBtn.disabled = false;
+              sendBtn.textContent = "重发";
+            } else {
+              sendBtn.textContent = left + "s";
+            }
+          }, 1000);
+        })
+        .catch(function (e) {
+          sendBtn.disabled = false;
+          showCErr(e.message || "发码失败");
+          if (err) { err.hidden = false; err.textContent = e.message; }
+        });
+    };
+    if (verifyBtn) verifyBtn.onclick = function () {
+      var codeEl = $("cfg-code");
+      var code = (codeEl && codeEl.value || "").trim();
+      if (!code) {
+        showCErr("请输入验证码");
+        if (err) { err.hidden = false; err.textContent = "请输入验证码"; }
+        return;
+      }
+      verifyBtn.disabled = true;
+      api("POST", "/api/accounts/" + encodeURIComponent(id) + "/verify-sms", { code: code, mobile: cfgMobile() })
+        .then(function (res) {
+          verifyBtn.disabled = false;
+          if (res && res.ok === false) throw new Error(res.error || res.message || "验证失败");
+          showCOk("短信验证成功");
+          if (hint) hint.textContent = "验证成功，可刷新桌面或保存";
+          return loadDesks();
+        })
+        .catch(function (e) {
+          verifyBtn.disabled = false;
+          showCErr(e.message || "验证失败");
+          if (err) { err.hidden = false; err.textContent = e.message; }
+        });
+    };
+  }
+
+  function closeConfigModal() {
+    state.configPid = null;
+    var modal = $("config-modal");
+    if (!modal) return;
+    modal.hidden = true;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function saveConfigModal() {
+    var id = state.configPid || state.currentId;
+    if (!id) return;
+    var body = {};
+    var labelEl = $("cfg-label");
+    var passEl = $("cfg-password");
+    var ivEl = $("cfg-interval");
+    var deskEl = $("cfg-desktop");
+    if (labelEl) body.label = labelEl.value.trim();
+    if (passEl && passEl.value) body.password = passEl.value;
+    if (ivEl && ivEl.value) body.keepalive_interval = parseInt(ivEl.value, 10);
+    if (deskEl && deskEl.value) {
+      body.instance_id = deskEl.value;
+      var opt = deskEl.options[deskEl.selectedIndex];
+      if (opt) {
+        body.machine_id = opt.getAttribute("data-machine-id") || "";
+        body.machine_name = opt.getAttribute("data-machine-name") || opt.textContent || "";
+      }
+    }
+    var err = $("config-modal-err");
+    api("PATCH", "/api/accounts/" + encodeURIComponent(id), body)
+      .then(function (res) {
+        if (res && res.ok === false) {
+          if (err) { err.hidden = false; err.textContent = res.error || "保存失败"; }
+          else showCErr(res.error || "保存失败");
+          return;
+        }
+        showCOk("配置已保存");
+        closeConfigModal();
+        loadAccounts();
+      })
+      .catch(function (e) {
+        if (err) { err.hidden = false; err.textContent = e.message; }
+        else showCErr(e.message);
+      });
+  }
+
+  function loginFromConfigModal() {
+    var id = state.configPid || state.currentId;
+    if (!id) return;
+    var passEl = $("cfg-password");
+    var body = {};
+    if (passEl && passEl.value) body.password = passEl.value;
+    var err = $("config-modal-err");
+    api("POST", "/api/accounts/" + encodeURIComponent(id) + "/login", body)
+      .then(function (res) {
+        if (res && res.ok === false) {
+          if (err) { err.hidden = false; err.textContent = res.error || "登录失败"; }
+          else showCErr(res.error || "登录失败");
+          return;
+        }
+        if (res && (res.need_sms || res.needSms || (res.data && res.data.need_sms))) {
+          if (res.mobile) state.mobile = res.mobile;
+          var hint = $("cfg-sms-hint");
+          if (hint) hint.textContent = "需要短信验证" + (res.mobile ? (" → " + res.mobile) : "") + "，请填验证码后点验证";
+          if (err) { err.hidden = false; err.textContent = "需要短信验证码，请使用下方「重发/验证」"; }
+          showCOk("需要短信验证码");
+          return;
+        }
+        if (res && res.mobile) state.mobile = res.mobile;
+        showCOk("登录成功，正在刷新桌面…");
+        return api("GET", "/api/accounts/" + encodeURIComponent(id) + "/desktops")
+          .then(function (r2) {
+            var list = (r2 && (r2.desktops || r2.items)) || [];
+            var sel = $("cfg-desktop");
+            if (!sel) return;
+            var acc = state.accounts.find(function (a) { return a.id === id; }) || {};
+            var cur = acc.instance_id || "";
+            sel.innerHTML = "";
+            if (!list.length) {
+              sel.innerHTML = '<option value="">（无桌面）</option>';
+              return;
+            }
+            list.forEach(function (d) {
+              var opt = document.createElement("option");
+              opt.value = d.instance_id || "";
+              opt.textContent = (d.machine_name || d.instance_id || "?") +
+                (d.status ? " [" + d.status + "]" : "");
+              opt.setAttribute("data-machine-id", d.machine_id || "");
+              opt.setAttribute("data-machine-name", d.machine_name || "");
+              if (d.instance_id === cur) opt.selected = true;
+              sel.appendChild(opt);
+            });
+          });
+      })
+      .catch(function (e) {
+        if (err) { err.hidden = false; err.textContent = e.message; }
+        else showCErr(e.message);
+      });
+  }
+
+
+  function renderCards() {
+    var box = $("timeline");
+    var empty = $("empty-state");
+    box.innerHTML = "";
+    if (!state.accounts.length) {
+      empty.hidden = false;
+      updateTopStats();
+      return;
+    }
+    empty.hidden = true;
+    state.accounts.forEach(function (acc) {
+      var k = fmtKa(acc.keepalive, "path_b");
+      var aka = fmtKa(acc.account_keepalive, "account");
+      var running = !!k.running;
+      var st = running ? "running" : (k.error ? "error" : "idle");
+      var statusText = running ? "保活中" : (k.error ? "异常" : "空闲");
+      var name = acc.label || acc.username || acc.id;
+      var user = acc.username || "未设置账号";
+      var deskName = acc.machine_name || "";
+      var deskId = acc.instance_id || "";
+      var deskShort = deskName || (deskId ? deskId.slice(0, 12) + "…" : "未选桌面");
+      var intervalSec = acc.keepalive_interval || 300;
+      var intervalMin = Math.max(1, Math.round(intervalSec / 60));
+      var errLine = (k.error || aka.error || "").trim();
+      var logs = (state.cardLogs && state.cardLogs[acc.id]) || [];
+      var logHtml = "";
+      if (logs.length) {
+        logHtml = logs.slice(-6).map(function (line) {
+          var t = typeof line === "string" ? line : (line.msg || line.message || JSON.stringify(line));
+          var lv = (typeof line === "object" && line.level) ? String(line.level).toLowerCase() : "info";
+          if (lv.indexOf("err") >= 0) lv = "error";
+          else if (lv.indexOf("warn") >= 0) lv = "warn";
+          else lv = "info";
+          return '<div class="log-line level-' + lv + '">' + esc(String(t)) + "</div>";
+        }).join("");
+      } else {
+        logHtml = '<div class="log-line level-info">暂无日志 · 双击打开完整日志</div>';
+      }
+      /* 对齐爱家 cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
+      var startStopBtn = running
+        ? '<button type="button" class="btn btn-stop" data-act="stop">停止保活</button>'
+        : '<button type="button" class="btn btn-start btn-primary" data-act="start">启动保活</button>';
+      var article = document.createElement("article");
+      article.className = "card status-" + st + (state.configPid === acc.id ? " is-configuring" : "");
+      article.setAttribute("data-id", acc.id);
+      article.innerHTML =
+        '<header class="card-head">' +
+          '<div class="card-title">' +
+            '<span class="status-dot" aria-hidden="true"></span>' +
+            "<div>" +
+              '<p class="card-name">' + esc(name) + "</p>" +
+              '<p class="card-meta">' + esc(user) + " · " + esc(deskShort) + "</p>" +
+            "</div>" +
+          "</div>" +
+          '<span class="badge badge-' + st + '">' + esc(statusText) + "</span>" +
+        "</header>" +
+        '<div class="card-summary">' +
+          "<div><span>云桌面</span><strong>" + esc(deskShort) + "</strong></div>" +
+          "<div><span>间隔</span><strong>" + esc(String(intervalMin)) + " 分钟</strong></div>" +
+          "<div><span>账号保活</span><strong>" + esc(aka.running ? "自动·运行中" : "自动·待命") + "</strong></div>" +
+          "<div><span>心跳</span><strong>" + esc(k.heart || "-") + "</strong></div>" +
+          "<div><span>轮次</span><strong>" + esc(String(k.rounds || "-")) + "</strong></div>" +
+          "<div><span>桌面ID</span><strong>" + esc(deskId ? deskId.slice(0, 14) + (deskId.length > 14 ? "…" : "") : "—") + "</strong></div>" +
+        "</div>" +
+        (errLine ? '<p class="card-error" role="alert">' + esc(errLine) + "</p>" : "") +
+        '<div class="card-surface">' +
+          '<div class="card-actions">' +
+            startStopBtn +
+            '<button type="button" class="btn btn-ghost" data-act="config">配置</button>' +
+            '<button type="button" class="btn btn-ghost" data-act="logs" title="刷新本卡片日志显示（不影响保活任务）">刷新日志</button>' +
+            '<button type="button" class="btn btn-ghost btn-danger-ghost" data-act="clear-logs" title="清空本卡片日志（不影响保活任务）">清除日志</button>' +
+          "</div>" +
+          '<div class="card-log card-log-expanded" data-act="log-open" title="双击日志查看完整记录">' +
+            '<div class="log-panel-head"><span>日志（常显最近 6 条；双击看全部）</span></div>' +
+            '<div class="log-box">' + logHtml + "</div>" +
+          "</div>" +
+        "</div>";
+      box.appendChild(article);
+    });
+    // bind actions
+    box.querySelectorAll(".card").forEach(function (card) {
+      var id = card.getAttribute("data-id");
+      card.querySelectorAll("[data-act]").forEach(function (btn) {
+        var act = btn.getAttribute("data-act");
+        if (act === "log-open") {
+          btn.addEventListener("dblclick", function (ev) {
+            ev.preventDefault();
+            openAccountLogFull(id);
+          });
+          return;
+        }
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          onCardAction(id, act, card);
+        });
+      });
+    });
+    updateTopStats();
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+
+  /* ---- #75fixm 爱家 needFull / applyLogs 防闪 ---- */
+  function accountFingerprint(a) {
+    if (!a) return "";
+    var k = a.keepalive || {};
+    var ak = a.account_keepalive || {};
+    return [
+      a.id,
+      a.label || "",
+      a.username || "",
+      a.instance_id || "",
+      a.machine_name || "",
+      a.machine_id || "",
+      a.keepalive_interval || "",
+      a.last_error || "",
+      k.running ? 1 : 0,
+      k.error || "",
+      ak.running ? 1 : 0,
+      ak.error || "",
+      a.logged_in ? 1 : 0
+    ].join("|");
+  }
+
+  function applyLogsToDom(id, force) {
+    var entries = state.cardLogs[id] || [];
+    var fp = entries.length + ":" + (entries.length ? (entries[entries.length - 1].seq || entries[entries.length - 1].ts || entries.length) : "0");
+    state._logFp = state._logFp || {};
+    if (!force && state._logFp[id] === fp) return;
+    state._logFp[id] = fp;
+    var card = document.querySelector('.card[data-id="' + id + '"]');
+    if (!card) return;
+    var box = card.querySelector(".log-box");
+    if (!box) return;
+    var logs = entries.slice(-6);
+    if (!logs.length) {
+      box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击打开完整日志</div>';
+    } else {
+      box.innerHTML = logs.map(function (line) {
+        var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
+        var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
+        if (lv.indexOf("err") >= 0) lv = "error";
+        else if (lv.indexOf("warn") >= 0) lv = "warn";
+        else lv = "info";
+        var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
+        return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
+      }).join("");
+    }
+  }
+
+  function softPollAccounts() {
+    /* 爱家 needFull：指纹不变只刷日志；配置弹窗打开时绝不整卡重渲 */
+    return api("GET", "/api/accounts").then(function (res) {
+      var list = res.accounts || res.data || [];
+      if (!Array.isArray(list)) list = [];
+      if (state.configPid) {
+        state.accounts = list;
+        updateTopStats();
+        list.forEach(function (a) { refreshAccountLogs(a.id, false); });
+        return;
+      }
+      var prev = state.accounts || [];
+      var prevMap = {};
+      prev.forEach(function (a) { prevMap[a.id] = accountFingerprint(a); });
+      var needFull = list.length !== prev.length;
+      if (!needFull) {
+        for (var i = 0; i < list.length; i++) {
+          var id = list[i].id;
+          if (!prevMap[id] || prevMap[id] !== accountFingerprint(list[i])) {
+            needFull = true;
+            break;
+          }
+        }
+      }
+      var savedLogs = state.cardLogs || {};
+      state.accounts = list;
+      updateTopStats();
+      if (needFull) {
+        renderCards();
+        state.cardLogs = savedLogs;
+        list.forEach(function (a) {
+          if (savedLogs[a.id] && savedLogs[a.id].length) applyLogsToDom(a.id, true);
+          else refreshAccountLogs(a.id, false);
+        });
+      } else {
+        list.forEach(function (a) { refreshAccountLogs(a.id, false); });
+      }
+    }).catch(function () {});
+  }
+
+  function loadAccounts() {
+    return api("GET", "/api/accounts").then(function (res) {
+      var list = res.accounts || res.data || [];
+      if (!Array.isArray(list) && res.ok === false) {
+        showCErr(res.error || "加载账号失败");
+        list = [];
+      }
+      state.accounts = list;
+      renderCards();
+      /* card-logs-hook */
+      (state.accounts || []).forEach(function (a) { refreshAccountLogs(a.id); });
+      return list;
+    }).catch(function (e) {
+      showCErr("加载账号失败: " + e.message);
+    });
+  }
+
+  function ensureAccount() {
+    if (state.currentId) {
+      return Promise.resolve(state.currentId);
+    }
+    var username = $("c-username").value.trim();
+    var password = $("c-password").value;
+    var label = $("c-label").value.trim();
+    if (!username || !password) {
+      showCErr("请输入账号和密码");
+      return Promise.reject(new Error("missing creds"));
+    }
+    return api("POST", "/api/accounts", {
+      label: label || username,
+      username: username,
+      password: password
+    }).then(function (res) {
+      if (!res.ok && !res.account) {
+        throw new Error(res.error || "创建账号失败");
+      }
+      var acc = res.account || res;
+      state.currentId = acc.id;
+      return loadAccounts().then(function () { return acc.id; });
+    });
+  }
+
+  // 短信区常显；对齐 CLI main.py login 分支：
+  // mobile 不占 UI：仅 state.mobile = login 回包（对齐 CLI result.mobile）；用户只输验证码
+  function maskMobile(m) {
+    m = (m || "").trim();
+    if (m.length < 7) return m || "（未返回）";
+    return m.slice(0, 3) + "****" + m.slice(-4);
+  }
+
+  function setSmsMobile(mobile) {
+    state.mobile = (mobile || "").trim();
+  }
+
+  function getSmsMobile() {
+    return (state.mobile || "").trim();
+  }
+
+  function setSmsHint(msg, mobile) {
+    if (msg && $("c-sms-msg")) $("c-sms-msg").textContent = msg;
+    if (mobile !== undefined && mobile !== null) setSmsMobile(mobile);
+  }
+
+  function resetSmsHint() {
+    state.mobile = "";
+    state.loginType = "";
+    $("c-code").value = "";
+    setSmsHint("公众 e 云 Path B（CLI 壳）。账密 → 登录；need_sms 时接口自带手机号并自动发码，你只需填验证码 → 选桌面启动保活。");
+  }
+
+  function startSendCooldown(btn) {
+    var n = 60;
+    btn.disabled = true;
+    btn.textContent = n + "s";
+    var t = setInterval(function () {
+      n--;
+      btn.textContent = n + "s";
+      if (n <= 0) { clearInterval(t); btn.disabled = false; btn.textContent = "重发"; }
+    }, 1000);
+  }
+
+  // 对齐 CLI：拿到 mobile 后立刻 send_sms，不要求用户点「发送」
+  function autoSendSms() {
+    if (!state.currentId) return Promise.resolve();
+    var mobile = getSmsMobile();
+    // 无 mobile 时不自动发（等用户在 fallback 手填后再点重发）
+    if (!mobile) return Promise.resolve({ ok: false, skipped: true });
+    return api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/send-sms", {
+      mobile: mobile
+    }).then(function (res) {
+      if (res.ok === false) {
+        showCErr(res.error || "自动发送验证码失败，可点「重发」");
+        return res;
+      }
+      showCOk("验证码已发送至 " + maskMobile(res.mobile || mobile) + "，请填写短信验证码");
+      startSendCooldown($("c-send-sms"));
+      try { $("c-code").focus(); } catch (e) {}
+      return res;
+    }).catch(function (e) {
+      showCErr(e.message || String(e));
+    });
+  }
+
+  function doLogin() {
+    showCErr("");
+    showCOk("");
+    resetSmsHint();
+    var username = $("c-username").value.trim();
+    var password = $("c-password").value;
+    if (!username || !password) { showCErr("请输入账号和密码"); return; }
+    var btn = $("c-login");
+    btn.disabled = true;
+    btn.textContent = "登录中...";
+    ensureAccount().then(function (id) {
+      return api("POST", "/api/accounts/" + encodeURIComponent(id) + "/login", {
+        username: username,
+        password: password
+      });
+    }).then(function (res) {
+      // Align CLI: password first → success | need_sms | failed
+      if (res.status === "need_sms") {
+        state.loginType = res.login_type || "device_trust";
+        var mob = res.mobile || "";
+        setSmsHint(
+          (res.message || "需要短信验证") + "。手机号来自登录接口（" + maskMobile(mob) + "），只需填写验证码。",
+          mob
+        );
+        // CLI 在 need_* 分支内自动 send_sms，再 input sms code
+        return autoSendSms();
+      }
+      if (res.status === "success" || (res.ok === true && res.status !== "need_sms" && !res.error)) {
+        setSmsHint("登录已成功，无需短信。若后续设备需再授权，仍可在此验证。", "");
+        showCOk("登录成功，请选择要保活的云电脑");
+        return afterLoginReady();
+      }
+      showCErr(res.error || res.message || "登录失败");
+    }).catch(function (e) {
+      showCErr(e.message || String(e));
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = "登录";
+      loadAccounts();
+    });
+  }
+
+  function afterLoginReady() {
+    return refreshDesktops();
+  }
+
+  function refreshDesktops() {
+    if (!state.currentId) {
+      showCErr("请先登录");
+      return Promise.resolve();
+    }
+    $("c-desktop-list").innerHTML = '<p class="hint">加载桌面中...</p>';
+    return api("GET", "/api/accounts/" + encodeURIComponent(state.currentId) + "/desktops")
+      .then(function (res) {
+        var list = res.desktops || [];
+        if (res.error) {
+          $("c-desktop-list").innerHTML = '<p class="composer-err">' + esc(res.error) + "</p>";
+          return;
+        }
+        if (!list.length) {
+          $("c-desktop-list").innerHTML = '<p class="hint">未找到云电脑</p>';
+          $("c-start").disabled = true;
+          return;
+        }
+        var html = "";
+        list.forEach(function (d, i) {
+          var iid = d.instance_id || d.instanceId || d.id || "";
+          var mid = d.machine_id || d.machineId || "";
+          var name = d.machine_name || d.name || d.display_name || iid || ("桌面" + (i + 1));
+          var vendor = d.vendor || d.origin_company_code || "";
+          var status = d.status || "?";
+          var checked = i === 0 ? " checked" : "";
+          if (i === 0) {
+            state.selectedDesktop = { instance_id: iid, machine_id: mid, name: name };
+          }
+          // Layout mirrors CLI list-desktops: name + status/vendor + instance/machine
+          html +=
+            '<label class="desktop-item">' +
+              '<input type="radio" name="desktop" value="' + esc(iid) + '" data-mid="' + esc(mid) + '" data-name="' + esc(name) + '"' + checked + ' />' +
+              '<span class="desktop-meta">' +
+                '<span class="desktop-name">' + esc(name) + '</span>' +
+                '<span class="desktop-sub">' +
+                  '<span class="desktop-status" data-status="' + esc(String(status)) + '">' + esc(String(status)) + '</span>' +
+                  (vendor ? '<span class="desktop-vendor">' + esc(vendor) + '</span>' : '') +
+                '</span>' +
+                '<span class="desktop-id">instance=' + esc(iid) + '</span>' +
+                (mid ? '<span class="desktop-id">machine=' + esc(mid) + '</span>' : '') +
+              '</span>' +
+            '</label>';
+        });
+        $("c-desktop-list").innerHTML = html;
+        $("c-start").disabled = false;
+        $("c-desktop-list").querySelectorAll('input[name="desktop"]').forEach(function (inp) {
+          inp.addEventListener("change", function () {
+            state.selectedDesktop = {
+              instance_id: inp.value,
+              machine_id: inp.getAttribute("data-mid") || "",
+              name: inp.getAttribute("data-name") || ""
+            };
+          });
+        });
+      });
+  }
+
+  function startFromComposer() {
+    if (!state.currentId) { showCErr("请先登录"); return; }
+    var d = state.selectedDesktop;
+    if (!d || !d.instance_id) { showCErr("请选择云电脑"); return; }
+    var interval = parseInt($("c-interval").value, 10) || 300;
+    var btn = $("c-start");
+    btn.disabled = true;
+    btn.textContent = "启动中...";
+    api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/keepalive/start", {
+      instance_id: d.instance_id,
+      machine_id: d.machine_id || "",
+      interval: interval
+    }).then(function (res) {
+      if (res.ok === false) {
+        showCErr(res.error || "启动失败");
+        return;
+      }
+      showCOk("已启动 Path B 保活 · HEART=" + String(res.heart != null ? res.heart : (res.keepalive && res.keepalive.heart)));
+      loadAccounts();
+      pullGlobalLogs(true);
+    }).catch(function (e) {
+      showCErr(e.message);
+    }).finally(function () {
+      btn.disabled = false;
+      btn.textContent = "启动保活";
+    });
+  }
+
+  function onCardAction(id, act, card) {
+    state.currentId = id;
+    if (act === "start") {
+      var acc = state.accounts.find(function (a) { return a.id === id; });
+      var body = {
+        instance_id: (acc && acc.instance_id) || "",
+        machine_id: (acc && acc.machine_id) || "",
+        interval: (acc && acc.keepalive_interval) || 300
+      };
+      if (!body.instance_id) {
+        showCErr("该账号尚无绑定桌面：请先点「配置」选择云电脑");
+        openConfigModal(id);
+        return;
+      }
+      api("POST", "/api/accounts/" + encodeURIComponent(id) + "/keepalive/start", body)
+        .then(function (res) {
+          if (res.ok === false) showCErr(res.error || "启动失败");
+          else showCOk("已启动桌面保活（账号态已随 CLI 自动开启）");
+          loadAccounts();
+          refreshAccountLogs(id);
+        })
+        .catch(function (e) { showCErr(e.message); });
+      return;
+    }
+    if (act === "stop") {
+      api("POST", "/api/accounts/" + encodeURIComponent(id) + "/keepalive/stop")
+        .then(function (res) {
+          if (res && res.ok === false) showCErr(res.error || "停止失败");
+          else showCOk("已停止桌面保活（账号保活已同步停止）");
+          loadAccounts();
+        })
+        .catch(function (e) { showCErr(e.message); });
+      return;
+    }
+    if (act === "logs") {
+      refreshAccountLogs(id, true);
+      return;
+    }
+    if (act === "config") {
+      openConfigModal(id);
+      return;
+    }
+    if (act === "clear-logs") {
+      /* HARD_GATE#853: real backend clear (not FE-only fake clear) */
+      var btn = card && card.querySelector('[data-act="clear-logs"]');
+      if (btn) btn.disabled = true;
+      api("DELETE", "/api/accounts/" + encodeURIComponent(id) + "/logs")
+        .then(function (res) {
+          if (btn) btn.disabled = false;
+          if (res && res.ok === false) {
+            showCErr(res.error || "清空日志失败");
+            return;
+          }
+          state.cardLogs[id] = [];
+          applyLogsToDom(id, true);
+          showCOk("日志已清空");
+        })
+        .catch(function (e) {
+          if (btn) btn.disabled = false;
+          showCErr(e.message || "清空日志失败");
+        });
+      return;
+    }
+  }
+
+  // SMS：对齐 CLI —— mobile 仅来自 login 回包；用户只输验证码；「重发」= 再次 send
+  $("c-send-sms").onclick = function () {
+    if (!state.currentId) { showCErr("请先点登录"); return; }
+    var mobile = getSmsMobile();
+    if (!mobile) { showCErr("请先登录；手机号由接口返回"); return; }
+    var btn = this;
+    btn.disabled = true;
+    api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/send-sms", { mobile: mobile })
+      .then(function (res) {
+        if (res.ok === false) { showCErr(res.error || "发送失败"); btn.disabled = false; return; }
+        if (res.mobile) setSmsMobile(res.mobile);
+        showCOk("验证码已发送至 " + maskMobile(res.mobile || mobile));
+        startSendCooldown(btn);
+        try { $("c-code").focus(); } catch (e) {}
+      }).catch(function (e) {
+        showCErr(e.message);
+        btn.disabled = false;
+      });
+  };
+
+  $("c-verify-sms").onclick = function () {
+    if (!state.currentId) { showCErr("请先点登录"); return; }
+    var mobile = getSmsMobile();
+    var code = $("c-code").value.trim();
+    if (!code) { showCErr("请输入验证码"); return; }
+    // 后端会用 session 里的 mobile；前端传空也能工作，但有值时一并带上
+    var btn = this;
+    btn.disabled = true;
+    api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/verify-sms", {
+      mobile: mobile,
+      code: code,
+      login_type: state.loginType
+    }).then(function (res) {
+      if (res.status === "success" || res.ok) {
+        setSmsHint("短信验证已通过。", state.mobile || "");
+        showCOk("短信验证成功，请选择要保活的云电脑");
+        return afterLoginReady();
+      }
+      showCErr(res.error || res.message || "验证失败");
+    }).catch(function (e) {
+      showCErr(e.message);
+    }).finally(function () {
+      btn.disabled = false;
+      loadAccounts();
+    });
+  };
+
+  function pullGlobalLogs(force) {
+    var q = force ? 0 : state.globalSince;
+    return api("GET", "/api/global-logs?since=" + q).then(function (res) {
+      var logs = res.logs || [];
+      if (!logs.length && !force) return;
+      var box = $("global-log");
+      if (force) box.innerHTML = "";
+      logs.forEach(function (e) {
+        // backend uses gseq for global_logs; per-account uses seq
+        var gs = e.gseq != null ? e.gseq : (e.seq != null ? e.seq : e.id);
+        if (gs != null && gs > state.globalSince) state.globalSince = gs;
+        var line = document.createElement("div");
+        line.className = "log-line level-" + String(e.level || "INFO").toLowerCase();
+        var who = e.label || e.account_id || e.account || "";
+        line.textContent =
+          "[" + (e.level || "INFO") + "] " + (e.ts || "") +
+          (who ? " (" + who + ")" : "") + " " + (e.msg || e.message || "");
+        box.appendChild(line);
+      });
+      // cap DOM
+      while (box.children.length > 300) box.removeChild(box.firstChild);
+      box.scrollTop = box.scrollHeight;
+    }).catch(function () { /* ignore poll errors */ });
+  }
+
+  $("c-login").onclick = doLogin;
+  $("c-start").onclick = startFromComposer;
+  $("c-refresh-desktops").onclick = function () { refreshDesktops(); };
+  $("btn-refresh").onclick = function () {
+    loadAccounts();
+    pullGlobalLogs(true);
+  };
+  $("btn-clear-log").onclick = function () {
+    $("global-log").innerHTML = "";
+    var fullBody = $("log-full-body");
+    if (fullBody) fullBody.innerHTML = "";
+  };
+  $("btn-help").onclick = function () {
+    $("help-modal").classList.remove("hidden");
+  };
+  $("help-close").onclick = function () {
+    $("help-modal").classList.add("hidden");
+  };
+
+  // 对齐爱家：双击全局日志 → 全量弹窗
+  function openLogFull() {
+    var src = $("global-log");
+    var body = $("log-full-body");
+    var modal = $("log-full-modal");
+    if (!src || !body || !modal) return;
+    body.innerHTML = src.innerHTML;
+    // HARD_GATE 对齐爱家：强制可见 + 高 z-index 压过 toast/其它 modal
+    modal.classList.remove("hidden", "is-hidden");
+    modal.classList.add("open", "is-open");
+    modal.removeAttribute("hidden");
+    modal.setAttribute("aria-hidden", "false");
+    modal.style.display = "flex";
+    modal.style.visibility = "visible";
+    modal.style.opacity = "1";
+    modal.style.pointerEvents = "auto";
+    modal.style.zIndex = "1200";
+    document.body.classList.add("modal-open", "log-modal-open");
+    try { body.scrollTop = body.scrollHeight; } catch (e) {}
+  }
+  function closeLogFull() {
+    var modal = $("log-full-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.classList.remove("open", "is-open");
+    modal.setAttribute("hidden", "");
+    modal.setAttribute("aria-hidden", "true");
+    modal.style.display = "";
+    modal.style.visibility = "";
+    modal.style.opacity = "";
+    modal.style.pointerEvents = "";
+    modal.style.zIndex = "";
+    document.body.classList.remove("modal-open", "log-modal-open");
+  }
+  (function bindLogFull() {
+    var g = $("global-log");
+    if (g) {
+      g.addEventListener("dblclick", function (ev) {
+        ev.preventDefault();
+        openLogFull();
+      });
+    }
+    // 对齐爱家：面板「完整日志」按钮打开二级页（z-index 高于其它 modal）
+    var openBtn = $("btn-open-log-full");
+    if (openBtn) {
+      openBtn.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        openLogFull();
+      });
+    }
+    var closeBtn = $("log-full-close");
+    if (closeBtn) closeBtn.addEventListener("click", closeLogFull);
+    var modal = $("log-full-modal");
+    if (modal) {
+      modal.addEventListener("click", function (ev) {
+        if (ev.target === modal) closeLogFull();
+      });
+    }
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") {
+        var m = $("log-full-modal");
+        if (m && !m.classList.contains("hidden") && !m.hasAttribute("hidden")) {
+          closeLogFull();
+        }
+      }
+    });
+  })();
+
+  
+  function setGateErr(msg, which) {
+    var setup = $("gate-setup-err");
+    var login = $("gate-login-err");
+    if (which === "setup" || !which) {
+      if (setup) setup.textContent = msg || "";
+    }
+    if (which === "login" || !which) {
+      if (login) login.textContent = msg || "";
+    }
+    if (which === "setup") { if (login) login.textContent = ""; }
+    if (which === "login") { if (setup) setup.textContent = ""; }
+  }
+
+  function showAccessGate(mode) {
+    var gate = $("access-gate");
+    var app = $("app");
+    if (!gate) return;
+    state.gateMode = mode || (state.setupRequired ? "setup" : "login");
+    gate.classList.remove("hidden");
+    gate.removeAttribute("hidden");
+    gate.hidden = false;
+    gate.setAttribute("aria-hidden", "false");
+    if (app) {
+      app.classList.add("gate-locked");
+      app.setAttribute("aria-hidden", "true");
+    }
+    var title = $("gate-title");
+    var sub = $("gate-sub");
+    var setupPane = $("gate-setup-panel");
+    var loginPane = $("gate-login-panel");
+    if (state.gateMode === "setup") {
+      if (title) title.textContent = "设置访问密钥";
+      if (sub) sub.textContent = "首次部署可选：保护控制台，之后可在顶栏修改。";
+      if (setupPane) setupPane.classList.remove("hidden");
+      if (loginPane) loginPane.classList.add("hidden");
+      setTimeout(function () { var el = $("gate-setup-input"); if (el) el.focus(); }, 50);
+    } else {
+      if (title) title.textContent = "输入访问密钥";
+      if (sub) sub.textContent = "控制台已启用访问保护，请输入密钥后继续。";
+      if (setupPane) setupPane.classList.add("hidden");
+      if (loginPane) loginPane.classList.remove("hidden");
+      setTimeout(function () { var el = $("gate-login-input"); if (el) el.focus(); }, 50);
+    }
+    updateTokenBtn();
+  }
+
+  function hideAccessGate() {
+    var gate = $("access-gate");
+    var app = $("app");
+    if (gate) {
+      gate.classList.add("hidden");
+      gate.setAttribute("hidden", "");
+      gate.hidden = true;
+      gate.setAttribute("aria-hidden", "true");
+    }
+    if (app) {
+      app.classList.remove("gate-locked");
+      app.setAttribute("aria-hidden", "false");
+    }
+    state.gateMode = "";
+    setGateErr("");
+    updateTokenBtn();
+  }
+
+  function updateTokenBtn() {
+    var btn = $("btn-token");
+    if (!btn) return;
+    if (state.authEnabled || state.tokenRequired) {
+      btn.textContent = "密钥✓";
+      btn.title = "访问密钥已启用（点此修改/关闭）";
+    } else {
+      btn.textContent = "密钥";
+      btn.title = "设置访问密钥（可选）";
+    }
+  }
+
+  function loadSysInfo() {
+    return api("GET", "/api/system/info").then(function (d) {
+      var el = $("sys-info");
+      if (el) {
+        var v = (d && (d.version || d.app_version || d.webui_version)) || "";
+        v = v ? ("v" + String(v).replace(/^v/, "")) : "";
+        var bits = ["公众移动云电脑保活", "WebUI"];
+        if (d && d.product) bits.push(d.product);
+        else bits.push("Path B");
+        if (d && d.claim != null) bits.push("claim=" + d.claim);
+        if (d && d.dual_evidence != null) bits.push("dual=" + d.dual_evidence);
+        else bits.push("dual=false");
+        if (v) bits.push(v);
+        el.textContent = bits.join(" · ");
+      }
+      return d;
+    }).catch(function () {
+      var el = $("sys-info");
+      if (el) el.textContent = "公众移动云电脑保活 · WebUI · Path B · dual=false";
+      return null;
+    });
+  }
+
+  function refreshAuthStatus() {
+    return api("GET", "/api/auth/status").then(function (st) {
+      if (!st) return null;
+      // server: authEnabled/tokenRequired/setupRequired/authenticated
+      state.tokenRequired = !!(st.tokenRequired);
+      state.authEnabled = !!(st.authEnabled != null ? st.authEnabled : st.tokenRequired);
+      state.setupRequired = !!(st.setupRequired);
+      state.authSource = (st.tokenSource || st.source || "") || state.authSource;
+      updateTokenBtn();
+      return st;
+    }).catch(function () { return null; });
+  }
+
+  function enterConsoleAfterAuth() {
+    hideAccessGate();
+    loadSysInfo();
+    loadAccounts();
+    pullGlobalLogs(true);
+    if (state.pollTimer) clearInterval(state.pollTimer);
+    /* #75fixm: poll only soft-sync; never full-render every 5s (闪屏根因) */
+    state.pollTimer = setInterval(function () {
+      softPollAccounts();
+      pullGlobalLogs(false);
+    }, 5000);
+  }
+
+  // config modal binds (once at parse time; NOT inside poll interval)
+  (function bindConfigModal() {
+    var closeBtn = $("config-modal-close");
+    var cancelBtn = $("config-modal-cancel");
+    var saveBtn = $("config-modal-save");
+    var loginBtn = $("config-modal-login");
+    var modal = $("config-modal");
+    if (closeBtn) closeBtn.addEventListener("click", closeConfigModal);
+    if (cancelBtn) cancelBtn.addEventListener("click", closeConfigModal);
+    if (saveBtn) saveBtn.addEventListener("click", saveConfigModal);
+    if (loginBtn) loginBtn.addEventListener("click", loginFromConfigModal);
+    if (modal) modal.addEventListener("click", function (ev) {
+      if (ev.target === modal) closeConfigModal();
+    });
+  })();
+
+  function randomToken() {
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    var out = "";
+    try {
+      var arr = new Uint8Array(18);
+      crypto.getRandomValues(arr);
+      for (var i = 0; i < arr.length; i++) out += chars[arr[i] % chars.length];
+    } catch (_) {
+      out = "ecloud" + String(Date.now()).slice(-8);
+    }
+    return out;
+  }
+
+  function submitGateSetup() {
+    setGateErr("", "setup");
+    var input = $("gate-setup-input");
+    var token = (input && input.value || "").trim();
+    if (!token) { setGateErr("请输入要设置的访问密钥，或点「随机生成」", "setup"); return; }
+    if (token.length < 4) { setGateErr("密钥至少 4 位", "setup"); return; }
+    var btn = $("gate-setup-ok");
+    if (btn) btn.disabled = true;
+    api("POST", "/api/auth/setup", { token: token }).then(function (res) {
+      if (btn) btn.disabled = false;
+      if (!res || res.ok === false) {
+        setGateErr((res && (res.message || res.error)) || "设置失败", "setup");
+        return;
+      }
+      var t = (res.token || token || "").trim();
+      setToken(t);
+      if (input) input.value = t;
+      state.setupRequired = false;
+      state.tokenRequired = true;
+      state.authEnabled = true;
+      enterConsoleAfterAuth();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      setGateErr((e && e.message) || "网络异常", "setup");
+    });
+  }
+
+  function submitGateLogin() {
+    setGateErr("", "login");
+    var input = $("gate-login-input");
+    var token = (input && input.value || "").trim();
+    if (!token) { setGateErr("请输入访问密钥", "login"); return; }
+    var btn = $("gate-login-ok");
+    if (btn) btn.disabled = true;
+    // store first so login request carries Authorization
+    setToken(token);
+    api("POST", "/api/auth/login", { token: token }).then(function (res) {
+      if (btn) btn.disabled = false;
+      if (!res || res.ok === false) {
+        setToken("");
+        setGateErr((res && (res.message || res.error)) || "密钥无效", "login");
+        return;
+      }
+      var t = (res.token || token || "").trim();
+      setToken(t);
+      state.tokenRequired = true;
+      state.authEnabled = true;
+      enterConsoleAfterAuth();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      setToken("");
+      setGateErr((e && e.message) || "网络异常", "login");
+    });
+  }
+
+  function skipGateSetup() {
+    // enter without setting token — server remains open
+    setToken("");
+    state.setupRequired = false;
+    enterConsoleAfterAuth();
+  }
+
+  function wireAccessGate() {
+    var setupOk = $("gate-setup-ok");
+    var setupGen = $("gate-setup-gen");
+    var setupSkip = $("gate-setup-skip");
+    var setupShow = $("gate-setup-show");
+    var setupInput = $("gate-setup-input");
+    var loginOk = $("gate-login-ok");
+    var loginShow = $("gate-login-show");
+    var loginInput = $("gate-login-input");
+    if (setupOk) setupOk.onclick = submitGateSetup;
+    if (setupGen) setupGen.onclick = function () {
+      var t = randomToken();
+      if (setupInput) {
+        setupInput.type = "text";
+        setupInput.value = t;
+      }
+      if (setupShow) {
+        setupShow.textContent = "隐藏";
+        setupShow.setAttribute("aria-pressed", "true");
+      }
+      setGateErr("", "setup");
+    };
+    if (setupSkip) setupSkip.onclick = skipGateSetup;
+    if (setupShow && setupInput) setupShow.onclick = function () {
+      var show = setupInput.type === "password";
+      setupInput.type = show ? "text" : "password";
+      setupShow.textContent = show ? "隐藏" : "显示";
+      setupShow.setAttribute("aria-pressed", show ? "true" : "false");
+    };
+    if (loginOk) loginOk.onclick = submitGateLogin;
+    if (loginShow && loginInput) loginShow.onclick = function () {
+      var show = loginInput.type === "password";
+      loginInput.type = show ? "text" : "password";
+      loginShow.textContent = show ? "隐藏" : "显示";
+      loginShow.setAttribute("aria-pressed", show ? "true" : "false");
+    };
+    if (setupInput) setupInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") submitGateSetup();
+    });
+    if (loginInput) loginInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") submitGateLogin();
+    });
+  }
+
+  function setTokenModalErr(msg) {
+    var el = $("token-modal-err");
+    if (el) el.textContent = msg || "";
+  }
+
+  function hideTokenModal() {
+    var m = $("token-modal");
+    if (!m) return;
+    m.classList.add("hidden");
+    m.setAttribute("hidden", "");
+    m.setAttribute("aria-hidden", "true");
+  }
+
+  function showTokenModal() {
+    var m = $("token-modal");
+    if (!m) return;
+    m.classList.remove("hidden");
+    m.removeAttribute("hidden");
+    m.setAttribute("aria-hidden", "false");
+    setTokenModalErr("");
+    var cur = $("token-modal-current");
+    var neu = $("token-modal-new");
+    if (cur) {
+      cur.value = getToken() || "";
+      cur.type = "password";
+    }
+    if (neu) {
+      neu.value = "";
+      neu.type = "password";
+    }
+    var shC = $("token-modal-show-current");
+    var shN = $("token-modal-show-new");
+    if (shC) { shC.textContent = "显示"; shC.setAttribute("aria-pressed", "false"); }
+    if (shN) { shN.textContent = "显示"; shN.setAttribute("aria-pressed", "false"); }
+    refreshAuthStatus().then(function () {
+      var st = $("token-modal-status");
+      if (!st) return;
+      if (state.authEnabled || state.tokenRequired) {
+        st.textContent = "鉴权已开启：操作控制台需要访问密钥。可修改、清除本机或关闭鉴权。";
+      } else {
+        st.textContent = "鉴权未开启：任何人可访问控制台。填写密钥后点「启用 / 修改」开启。";
+      }
+    }).catch(function () {
+      var st = $("token-modal-status");
+      if (st) st.textContent = "无法读取鉴权状态，仍可尝试本地操作。";
+    });
+  }
+
+  function openTokenManager() {
+    // Secondary page (not gate wizard). Gate remains first-run / 401 only.
+    showTokenModal();
+  }
+
+  function wireTokenModal() {
+    var closeBtn = $("token-modal-close");
+    if (closeBtn) closeBtn.onclick = hideTokenModal;
+    var modal = $("token-modal");
+    if (modal) {
+      modal.addEventListener("click", function (e) {
+        if (e.target === modal) hideTokenModal();
+      });
+    }
+    function bindShow(btnId, inputId) {
+      var btn = $(btnId);
+      var input = $(inputId);
+      if (!btn || !input) return;
+      btn.onclick = function () {
+        var show = input.type === "password";
+        input.type = show ? "text" : "password";
+        btn.textContent = show ? "隐藏" : "显示";
+        btn.setAttribute("aria-pressed", show ? "true" : "false");
+      };
+    }
+    bindShow("token-modal-show-current", "token-modal-current");
+    bindShow("token-modal-show-new", "token-modal-new");
+    var gen = $("token-modal-gen");
+    if (gen) gen.onclick = function () {
+      var chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+      var out = "";
+      for (var i = 0; i < 16; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+      var neu = $("token-modal-new");
+      if (neu) { neu.value = out; neu.type = "text"; }
+      var shN = $("token-modal-show-new");
+      if (shN) { shN.textContent = "隐藏"; shN.setAttribute("aria-pressed", "true"); }
+      setTokenModalErr("已生成随机密钥，确认后点「启用 / 修改」");
+    };
+    var clearLocal = $("token-modal-clear-local");
+    if (clearLocal) clearLocal.onclick = function () {
+      setToken("");
+      var cur = $("token-modal-current");
+      if (cur) cur.value = "";
+      setTokenModalErr("已清除本机保存的密钥（服务端鉴权状态不变）");
+      if (state.tokenRequired) {
+        hideTokenModal();
+        showAccessGate("login");
+      }
+    };
+    var disableBtn = $("token-modal-disable");
+    if (disableBtn) disableBtn.onclick = function () {
+      var curEl = $("token-modal-current");
+      var cur = ((curEl && curEl.value) || getToken() || "").trim();
+      if (!cur) { setTokenModalErr("关闭鉴权需要当前密钥"); return; }
+      api("POST", "/api/auth/disable", { token: cur }).then(function (res) {
+        if (!res || res.ok === false) {
+          setTokenModalErr((res && (res.message || res.error)) || "关闭失败");
+          return;
+        }
+        setToken("");
+        state.authEnabled = false;
+        state.tokenRequired = false;
+        hideTokenModal();
+        enterConsoleAfterAuth();
+      });
+    };
+    var enableBtn = $("token-modal-enable");
+    if (enableBtn) enableBtn.onclick = function () {
+      var curEl = $("token-modal-current");
+      var neuEl = $("token-modal-new");
+      var cur = ((curEl && curEl.value) || getToken() || "").trim();
+      var neu = ((neuEl && neuEl.value) || "").trim();
+      var token = neu || cur;
+      if (!token || token.length < 4) {
+        setTokenModalErr("密钥至少 4 位（启用填新密钥；修改填新密钥）");
+        return;
+      }
+      function okDone(t) {
+        setToken(t || token);
+        state.authEnabled = true;
+        state.tokenRequired = true;
+        hideTokenModal();
+        enterConsoleAfterAuth();
+      }
+      // change if auth already on; else setup
+      if (state.authEnabled || state.tokenRequired) {
+        if (!neu) { setTokenModalErr("修改密钥请填写「新密钥」"); return; }
+        api("POST", "/api/auth/change", { token: neu, currentToken: cur }).then(function (res) {
+          if (!res || res.ok === false) {
+            setTokenModalErr((res && (res.message || res.error)) || "修改失败");
+            return;
+          }
+          okDone((res && res.token) || neu);
+        });
+      } else {
+        api("POST", "/api/auth/setup", { token: token }).then(function (res) {
+          if (!res || res.ok === false) {
+            setTokenModalErr((res && (res.message || res.error)) || "启用失败");
+            return;
+          }
+          okDone((res && res.token) || token);
+        });
+      }
+    };
+  }
+
+  function boot() {
+    wireAccessGate();
+    wireTokenModal();
+    var btnTok = $("btn-token");
+    if (btnTok) btnTok.onclick = openTokenManager;
+    refreshAuthStatus().then(function (st) {
+      loadSysInfo();
+      // No server key → optional setup gate once
+      if (state.setupRequired && !getToken()) {
+        // only force setup UI if server says setupRequired true explicitly
+        if (st && st.setupRequired) {
+          showAccessGate("setup");
+          return;
+        }
+      }
+      if (state.tokenRequired && !getToken()) {
+        showAccessGate("login");
+        return;
+      }
+      // If token required and we have token, verify via a protected call
+      if (state.tokenRequired && getToken()) {
+        return api("GET", "/api/accounts").then(function (res) {
+          if (res && res._http === 401) {
+            setToken("");
+            showAccessGate("login");
+            return;
+          }
+          enterConsoleAfterAuth();
+        }).catch(function () { enterConsoleAfterAuth(); });
+      }
+      enterConsoleAfterAuth();
+    }).catch(function () {
+      enterConsoleAfterAuth();
+    });
+  }
+
+
+// boot
+  boot();
+})();
+</script>
+</body>
+</html>

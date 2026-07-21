@@ -1,0 +1,18 @@
+[Unit]
+Description=public-ecloud SPICE path_B keepalive (claim=false)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# user unit: DO NOT set User=
+WorkingDirectory=%h/ecloud-cmsszte-alive
+EnvironmentFile=-%h/ecloud-cmsszte-alive/packaging/systemd/ecloud-spice-keepalive.env
+ExecStart=%h/ecloud-cmsszte-alive/bin/public-spice-keepalive run
+Restart=on-failure
+RestartSec=30
+# Hard pins (app also enforces):
+# production_claim=false dual_evidence_ok=false forbid jtydn/aijia
+
+[Install]
+WantedBy=default.target
