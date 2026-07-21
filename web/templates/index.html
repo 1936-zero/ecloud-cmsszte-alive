@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众移动云电脑保活</title>
 <link rel="icon" type="image/png" href="/static/logo.png?v=logo20260721c">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=fixv20260722b">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=fixz20260722c">
 <!-- #75fixr: 穿透/内嵌浏览器常缓存旧 style.css；关键底钮+toast 内联，HTML 一更即生效 -->
 <style id="fixr-mobile-config-actions">
 /* toast 气泡（对齐爱家：底中浮层，不依赖 style.css 缓存） */
@@ -496,21 +496,10 @@
         if (typeof openLogFull === "function") openLogFull();
         return;
       }
-      var entries = state.cardLogs[id] || [];
-      fullBody.innerHTML = entries.length
-        ? entries.map(function (line) {
-            var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
-            var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
-            if (lv.indexOf("err") >= 0) lv = "error";
-            else if (lv.indexOf("warn") >= 0) lv = "warn";
-            else lv = "info";
-            var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
-            return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
-          }).join("")
-        : '<div class="log-line">暂无日志</div>';
       modal.hidden = false;
       modal.classList.remove("hidden");
       modal.setAttribute("aria-hidden", "false");
+      renderLogFullBody(id);
     });
   }
 
@@ -938,30 +927,112 @@
     ].join("|");
   }
 
+  function isKeepaliveLogLine(line) {
+    /* #75fixz: Path B / 账号保活优先，避免登录三件套占满 6 行外露 */
+    var t = typeof line === "string" ? line : (line && (line.msg || line.message || line.text)) || "";
+    t = String(t);
+    return (
+      t.indexOf("Path B") >= 0 ||
+      t.indexOf("账号保活") >= 0 ||
+      t.indexOf("[账号保活]") >= 0 ||
+      /heart\s*=/i.test(t) ||
+      t.indexOf("保活成功") >= 0 ||
+      t.indexOf("保活失败") >= 0 ||
+      t.indexOf("保活异常") >= 0
+    );
+  }
+
+  function isLoginNoiseLine(line) {
+    var t = typeof line === "string" ? line : (line && (line.msg || line.message || line.text)) || "";
+    t = String(t);
+    return (
+      t.indexOf("登录中:") === 0 ||
+      t.indexOf("登录中: ") >= 0 ||
+      t.indexOf("登录结果:") === 0 ||
+      t.indexOf("登录结果: ") >= 0 ||
+      t === "登录成功" ||
+      t.indexOf("登录成功") === 0
+    );
+  }
+
+  function pickCompactCardLogs(entries, maxN) {
+    maxN = maxN || 6;
+    if (!entries || !entries.length) return [];
+    var ka = [];
+    var rest = [];
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (isKeepaliveLogLine(e)) ka.push(e);
+      else if (!isLoginNoiseLine(e)) rest.push(e);
+      /* login noise dropped from compact view; still in full modal */
+    }
+    var out = ka.slice(-maxN);
+    if (out.length < maxN) {
+      var need = maxN - out.length;
+      out = rest.slice(-need).concat(out);
+    }
+    /* keep chronological order */
+    out.sort(function (a, b) {
+      var sa = (a && (a.seq || 0)) || 0;
+      var sb = (b && (b.seq || 0)) || 0;
+      if (sa !== sb) return sa - sb;
+      var ta = (a && a.ts) || "";
+      var tb = (b && b.ts) || "";
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+    return out.slice(-maxN);
+  }
+
+  function formatLogLineHtml(line) {
+    var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
+    var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
+    if (lv.indexOf("err") >= 0) lv = "error";
+    else if (lv.indexOf("warn") >= 0) lv = "warn";
+    else lv = "info";
+    var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
+    return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
+  }
+
+  function renderLogFullBody(id) {
+    var fullBody = $("log-full-body");
+    var modal = $("log-full-modal");
+    if (!fullBody || !modal) return;
+    var open = !modal.hidden && !modal.classList.contains("hidden");
+    if (!open) return;
+    if (state.currentId && id && state.currentId !== id) return;
+    var entries = state.cardLogs[id || state.currentId] || [];
+    fullBody.innerHTML = entries.length
+      ? entries.map(formatLogLineHtml).join("")
+      : '<div class="log-line">暂无日志</div>';
+    try {
+      fullBody.scrollTop = fullBody.scrollHeight;
+    } catch (e) {}
+  }
+
   function applyLogsToDom(id, force) {
     var entries = state.cardLogs[id] || [];
     var fp = entries.length + ":" + (entries.length ? (entries[entries.length - 1].seq || entries[entries.length - 1].ts || entries.length) : "0");
     state._logFp = state._logFp || {};
-    if (!force && state._logFp[id] === fp) return;
+    if (!force && state._logFp[id] === fp) {
+      /* still sync full modal if open */
+      renderLogFullBody(id);
+      return;
+    }
     state._logFp[id] = fp;
     var card = document.querySelector('.card[data-id="' + id + '"]');
-    if (!card) return;
-    var box = card.querySelector(".log-box");
-    if (!box) return;
-    var logs = entries.slice(-6);
-    if (!logs.length) {
-      box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
-    } else {
-      box.innerHTML = logs.map(function (line) {
-        var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
-        var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
-        if (lv.indexOf("err") >= 0) lv = "error";
-        else if (lv.indexOf("warn") >= 0) lv = "warn";
-        else lv = "info";
-        var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
-        return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
-      }).join("");
+    if (card) {
+      var box = card.querySelector(".log-box");
+      if (box) {
+        var logs = pickCompactCardLogs(entries, 6);
+        if (!logs.length) {
+          box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
+        } else {
+          box.innerHTML = logs.map(formatLogLineHtml).join("");
+        }
+      }
     }
+    /* #75fixz: 全量弹窗打开时 softPoll 同步 body */
+    renderLogFullBody(id);
   }
 
   function softPollAccounts() {
@@ -1411,9 +1482,17 @@
     pullGlobalLogs(true);
   };
   $("btn-clear-log").onclick = function () {
-    $("global-log").innerHTML = "";
-    var fullBody = $("log-full-body");
-    if (fullBody) fullBody.innerHTML = "";
+    api("POST", "/api/global-logs/clear")
+      .then(function () {
+        state.globalSince = 0;
+        $("global-log").innerHTML = "";
+        var fullBody = $("log-full-body");
+        if (fullBody) fullBody.innerHTML = "";
+        pullGlobalLogs(true);
+      })
+      .catch(function (e) {
+        toast("清空运行日志失败: " + ((e && e.message) || e), "error");
+      });
   };
   $("btn-help").onclick = function () {
     $("help-modal").classList.remove("hidden");

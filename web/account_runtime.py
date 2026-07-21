@@ -304,24 +304,47 @@ class AccountRuntime:
         return {"ok": True, "cleared": True}
 
 
+    @staticmethod
+    def _is_keepalive_round_tick(msg: str) -> bool:
+        """Per-round success ticks belong on the card only.
+
+        Align 爱家 bottom「运行日志」: lifecycle / status / failures only,
+        NOT every Path B heart or 账号保活 success round.
+        """
+        s = str(msg or "")
+        # [n] Path B 成功 heart=... / status=...
+        if re.search(r"\[\d+\]\s*Path B 成功", s):
+            return True
+        # [n] 账号保活成功 / 重登后账号保活成功
+        if re.search(r"\[\d+\]\s*(?:重登后)?账号保活成功", s):
+            return True
+        return False
+
     def _install_km_log_bridge(self) -> None:
-        """Mirror KeepaliveManager ring buffer into account backend logs."""
+        """Mirror KeepaliveManager into account logs; global = lifecycle/errors only."""
         orig = self.km._log
 
         def _bridged(level: str, msg: str, _orig=orig):
             _orig(level, msg)
-            # avoid recursive global spam on high-frequency heart ok if needed later
-            self.log(level, msg, to_global=True)
+            # 卡片 ring 始终全量；底部运行日志对齐爱家，不刷每轮 heart
+            lvl = str(level or "").upper()
+            tick = self._is_keepalive_round_tick(msg)
+            to_g = (not tick) or lvl in ("WARN", "WARNING", "ERROR")
+            self.log(level, msg, to_global=to_g)
 
         self.km._log = _bridged  # type: ignore[method-assign]
 
     def _install_aka_log_bridge(self) -> None:
-        """Mirror AccountKeepaliveManager ring buffer into account backend logs."""
+        """Mirror AccountKeepaliveManager; global = lifecycle/errors only."""
         orig = self.aka._log
 
         def _bridged(level: str, msg: str, _orig=orig):
             _orig(level, msg)
-            self.log(level, f"[账号保活] {msg}", to_global=True)
+            full = f"[账号保活] {msg}"
+            lvl = str(level or "").upper()
+            tick = self._is_keepalive_round_tick(msg)
+            to_g = (not tick) or lvl in ("WARN", "WARNING", "ERROR")
+            self.log(level, full, to_global=to_g)
 
         self.aka._log = _bridged  # type: ignore[method-assign]
 
@@ -458,7 +481,13 @@ class AccountRuntime:
         return {"ok": True, "account": self.public_meta()}
 
     # ------------------------------------------------------------------ login
-    def login(self, username: str, password: str) -> dict:
+    def login(self, username: str, password: str, *, quiet: bool = False) -> dict:
+        """密码登录。
+
+        quiet=True：成功路径的「登录中/结果/成功」只写卡内 ring，不上 global
+        （Path B / 账号保活 relogin 每轮静默刷新 token 时使用，避免淹没保活行）。
+        失败/需短信仍始终上 global，便于用户感知。
+        """
         username = (username or "").strip()
         password = password or ""
         if not username or not password:
@@ -478,17 +507,20 @@ class AccountRuntime:
             self._cfg["updated_at"] = _now_iso()
             self._save_cfg()
 
-        self.log("INFO", f"登录中: user={username}")
+        # quiet 成功：卡内 only；失败/非 success：仍 to_global 便于排查
+        self.log("INFO", f"登录中: user={username}", to_global=not quiet)
         result = login.login_with_password(http, username, password)
+        _ok = result.get("status") == login.LoginResult.SUCCESS
         self.log(
             "INFO",
             f"登录结果: {json.dumps(_safe_log_obj({'status': result.get('status'), 'error': result.get('error'), 'error_code': result.get('error_code')}), ensure_ascii=False)}",
+            to_global=(not quiet) or (not _ok),
         )
 
         if result["status"] == login.LoginResult.SUCCESS:
             token = result["access_token"]
             self.set_token(token)
-            self.log("INFO", "登录成功")
+            self.log("INFO", "登录成功", to_global=not quiet)
             aka = self._autostart_account_keepalive_after_login()
             out = {"status": "success", "token": token[:20] + "..."}
             if aka is not None:
@@ -640,7 +672,8 @@ class AccountRuntime:
         if not username or not password:
             self.log("ERROR", "重登失败：缺少已保存账号密码")
             return False
-        r = self.login(username, password)
+        # Path B / AKA 轮次 relogin：成功明细不刷 global，避免淹没 heart/保活行
+        r = self.login(username, password, quiet=True)
         return r.get("status") == "success"
 
     # ------------------------------------------------------------------ desktops
@@ -987,6 +1020,25 @@ class AccountRegistry:
     def get_global_logs(self, since: int = 0) -> list[dict]:
         with self._lock:
             return [e for e in self._global_logs if int(e.get("gseq") or 0) > since]
+
+    def clear_global_logs(self) -> dict:
+        """Clear bottom 「运行日志」 ring + file (DOM clear alone was cosmetic)."""
+        with self._lock:
+            self._global_logs.clear()
+            try:
+                self.global_logs_path.write_text("", encoding="utf-8")
+            except Exception as e:
+                log.warning("clear global logs file failed: %s", e)
+                return {"ok": False, "error": str(e)}
+        self.append_global_log(
+            {
+                "level": "info",
+                "msg": "运行日志已清空",
+                "account_id": "",
+                "account_label": "",
+            }
+        )
+        return {"ok": True, "cleared": True}
 
     # -------------------------------------------------------------- CRUD
     def list_accounts(self) -> list[dict]:

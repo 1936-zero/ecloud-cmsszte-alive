@@ -1288,6 +1288,11 @@ def create_app() -> Flask:
         reg = get_registry()
         return jsonify({"ok": True, "logs": reg.get_global_logs(since)})
 
+    @app.route("/api/global-logs/clear", methods=["POST"])
+    def api_global_logs_clear():
+        reg = get_registry()
+        return jsonify(reg.clear_global_logs())
+
     return app
 
 
