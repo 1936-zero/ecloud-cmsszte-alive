@@ -490,22 +490,31 @@
   }
 
   function openAccountLogFull(id) {
+    /* HARD: never fall back to openLogFull (that resets source=global) */
     state.currentId = id;
     state.logModalSource = "card";
     state.logModalAccountId = id;
-    refreshAccountLogs(id).then(function () {
-      var fullBody = $("log-full-body");
-      var modal = $("log-full-modal");
-      if (!fullBody || !modal) {
-        // fallback: use existing openLogFull if present
-        if (typeof openLogFull === "function") openLogFull();
-        return;
-      }
-      var title = $("log-full-title");
-      if (title) title.textContent = "账号日志";
-      modal.hidden = false;
-      modal.classList.remove("hidden");
+    var fullBody = $("log-full-body");
+    var modal = $("log-full-modal");
+    var title = $("log-full-title");
+    if (title) title.textContent = "账号日志";
+    if (modal) {
+      modal.classList.remove("hidden", "is-hidden");
+      modal.classList.add("open", "is-open");
+      modal.removeAttribute("hidden");
       modal.setAttribute("aria-hidden", "false");
+      modal.style.display = "flex";
+      modal.style.visibility = "visible";
+      modal.style.opacity = "1";
+      modal.style.pointerEvents = "auto";
+      modal.style.zIndex = "1200";
+      document.body.classList.add("modal-open", "log-modal-open");
+    }
+    /* paint cached ring immediately so title/body match card, not bottom 运行日志 */
+    if (fullBody) renderLogFullBody(id);
+    refreshAccountLogs(id).then(function () {
+      if (state.logModalSource !== "card" || state.logModalAccountId !== id) return;
+      if (title) title.textContent = "账号日志";
       renderLogFullBody(id);
     });
   }
@@ -877,8 +886,8 @@
             '<button type="button" class="btn btn-ghost" data-act="logs" title="刷新本卡片日志显示（不影响保活任务）">刷新日志</button>' +
             '<button type="button" class="btn btn-ghost btn-danger-ghost" data-act="clear-logs" title="清空本卡片日志（不影响保活任务）">清除日志</button>' +
           "</div>" +
-          '<div class="card-log card-log-expanded" data-act="log-open" title="双击日志查看完整记录">' +
-            '<div class="log-panel-head"><span>运行日志（双击查看全部）</span></div>' +
+          '<div class="card-log card-log-expanded" data-act="log-open" title="双击查看本账号完整日志">' +
+            '<div class="log-panel-head"><span>账号日志（双击查看全部）</span></div>' +
             '<div class="log-box">' + logHtml + "</div>" +
           "</div>" +
         "</div>";
