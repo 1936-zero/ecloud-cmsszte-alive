@@ -351,6 +351,9 @@
     mobile: "", // login 接口返回的手机号（对齐 CLI result.mobile）
     selectedDesktop: null, // {instance_id, machine_id, name}
     globalSince: 0,
+    /* shared #log-full-modal: "global" | "card" | null — softPoll 不得用卡日志盖运行日志 */
+    logModalSource: null,
+    logModalAccountId: null,
     pollTimer: null,
     tokenRequired: false,
     setupRequired: false,
@@ -488,6 +491,8 @@
 
   function openAccountLogFull(id) {
     state.currentId = id;
+    state.logModalSource = "card";
+    state.logModalAccountId = id;
     refreshAccountLogs(id).then(function () {
       var fullBody = $("log-full-body");
       var modal = $("log-full-modal");
@@ -496,6 +501,8 @@
         if (typeof openLogFull === "function") openLogFull();
         return;
       }
+      var title = $("log-full-title");
+      if (title) title.textContent = "账号日志";
       modal.hidden = false;
       modal.classList.remove("hidden");
       modal.setAttribute("aria-hidden", "false");
@@ -993,14 +1000,35 @@
     return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
   }
 
+  function isLogFullModalOpen() {
+    var modal = $("log-full-modal");
+    if (!modal) return false;
+    return !modal.hidden && !modal.classList.contains("hidden");
+  }
+
+  function syncGlobalLogModalBody() {
+    /* only when modal is showing bottom 运行日志 (not card ring) */
+    if (state.logModalSource !== "global") return;
+    if (!isLogFullModalOpen()) return;
+    var src = $("global-log");
+    var body = $("log-full-body");
+    if (!src || !body) return;
+    body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
+    try {
+      body.scrollTop = body.scrollHeight;
+    } catch (e) {}
+  }
+
   function renderLogFullBody(id) {
+    /* HARD: softPoll/card refresh must NEVER overwrite bottom 运行日志 modal */
+    if (state.logModalSource !== "card") return;
     var fullBody = $("log-full-body");
     var modal = $("log-full-modal");
     if (!fullBody || !modal) return;
-    var open = !modal.hidden && !modal.classList.contains("hidden");
-    if (!open) return;
-    if (state.currentId && id && state.currentId !== id) return;
-    var entries = state.cardLogs[id || state.currentId] || [];
+    if (!isLogFullModalOpen()) return;
+    var target = id || state.logModalAccountId || state.currentId;
+    if (state.logModalAccountId && target && state.logModalAccountId !== target) return;
+    var entries = state.cardLogs[target] || [];
     fullBody.innerHTML = entries.length
       ? entries.map(formatLogLineHtml).join("")
       : '<div class="log-line">暂无日志</div>';
@@ -1453,7 +1481,11 @@
     var q = force ? 0 : state.globalSince;
     return api("GET", "/api/global-logs?since=" + q).then(function (res) {
       var logs = res.logs || [];
-      if (!logs.length && !force) return;
+      if (!logs.length && !force) {
+        /* still keep open global modal in sync after clear */
+        syncGlobalLogModalBody();
+        return;
+      }
       var box = $("global-log");
       if (force) box.innerHTML = "";
       logs.forEach(function (e) {
@@ -1471,6 +1503,8 @@
       // cap DOM
       while (box.children.length > 300) box.removeChild(box.firstChild);
       box.scrollTop = box.scrollHeight;
+      /* #75fixaa: 运行日志弹窗打开时跟随底部 viewport，不被卡日志污染 */
+      syncGlobalLogModalBody();
     }).catch(function () { /* ignore poll errors */ });
   }
 
@@ -1486,8 +1520,11 @@
       .then(function () {
         state.globalSince = 0;
         $("global-log").innerHTML = "";
-        var fullBody = $("log-full-body");
-        if (fullBody) fullBody.innerHTML = "";
+        /* only wipe modal body when it is showing 运行日志, not account card ring */
+        if (state.logModalSource === "global" || !state.logModalSource) {
+          var fullBody = $("log-full-body");
+          if (fullBody) fullBody.innerHTML = "";
+        }
         pullGlobalLogs(true);
       })
       .catch(function (e) {
@@ -1507,7 +1544,11 @@
     var body = $("log-full-body");
     var modal = $("log-full-modal");
     if (!src || !body || !modal) return;
-    body.innerHTML = src.innerHTML;
+    state.logModalSource = "global";
+    state.logModalAccountId = null;
+    var title = $("log-full-title");
+    if (title) title.textContent = "运行日志";
+    body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
     // HARD_GATE 对齐爱家：强制可见 + 高 z-index 压过 toast/其它 modal
     modal.classList.remove("hidden", "is-hidden");
     modal.classList.add("open", "is-open");
@@ -1524,6 +1565,8 @@
   function closeLogFull() {
     var modal = $("log-full-modal");
     if (!modal) return;
+    state.logModalSource = null;
+    state.logModalAccountId = null;
     modal.classList.add("hidden");
     modal.classList.remove("open", "is-open");
     modal.setAttribute("hidden", "");
