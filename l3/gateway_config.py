@@ -152,7 +152,11 @@ def merge_gateway_into_cloud_pc(
     *,
     only_missing: bool = True,
 ) -> dict:
-    """Write resolved gateway into cfg (in-memory). Caller saves if needed."""
+    """Write resolved gateway into cfg (in-memory). Caller saves if needed.
+
+    only_missing=False force-overwrites cag_host/port/csapip + gateway_source
+    (used when device customLoginParams corrects a stale default region CAG).
+    """
     out = dict(cfg)
     mapping = {
         "cag_host": gw.cag_host,
@@ -163,10 +167,84 @@ def merge_gateway_into_cloud_pc(
         if only_missing and out.get(k):
             continue
         out[k] = v
-    out.setdefault("gateway_source", gw.source)
+    if only_missing:
+        out.setdefault("gateway_source", gw.source)
+    else:
+        out["gateway_source"] = gw.source
     out.setdefault("production_claim", False)
     out.setdefault("pin_product_line", PIN_PRODUCT_LINE)
     return out
+
+
+def gateway_from_custom_login_params(
+    clp: Any,
+    *,
+    source: str = "device_customLoginParams",
+) -> Optional[GatewayEndpoints]:
+    """Parse machineList[].customLoginParams → region CAG (#75fixx).
+
+    Prefer first IPv4 entry in cagList + csapip. Skip IPv6 (URL needs brackets).
+    ``clp`` may be a dict or a JSON string. Returns None if unusable.
+    """
+    if clp is None or clp == "":
+        return None
+    if isinstance(clp, str):
+        s = clp.strip()
+        if not s:
+            return None
+        try:
+            clp = json.loads(s)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(clp, Mapping):
+        return None
+
+    # ban-line hard gate (never accept 爱家/jtydn hosts)
+    try:
+        ban = _ban_check(json.dumps(dict(clp), ensure_ascii=False)[:800])
+    except Exception:
+        ban = _ban_check(str(clp)[:800])
+    if ban:
+        log.warning("customLoginParams ban_hit=%s; ignore", ban)
+        return None
+
+    host = ""
+    port = DEFAULT_CAG_PORT
+    cag_list = clp.get("cagList") or clp.get("cag_list") or []
+    if isinstance(cag_list, list):
+        for item in cag_list:
+            if not isinstance(item, Mapping):
+                continue
+            addr = str(item.get("addr") or item.get("ip") or item.get("host") or "").strip()
+            if not addr:
+                continue
+            # skip IPv6 literals (contain ':' beyond nothing; v4 never has ':')
+            if ":" in addr:
+                continue
+            if not re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", addr):
+                continue
+            host = addr
+            port = _as_int(item.get("port"), DEFAULT_CAG_PORT)
+            break
+
+    csap = str(clp.get("csapip") or clp.get("csapIp") or clp.get("csap_ip") or "").strip()
+    # skip pure IPv6 csap forms
+    if csap and csap.count(":") > 1:
+        csap = ""
+
+    if not host and not csap:
+        return None
+
+    notes = ["from machine customLoginParams cagList"]
+    if host:
+        notes.append(f"cag={host}:{port}")
+    return GatewayEndpoints(
+        cag_host=host or DEFAULT_CAG_HOST,
+        cag_port=port if host else DEFAULT_CAG_PORT,
+        csapip=csap or DEFAULT_CSAPIP,
+        source=source,
+        notes=notes,
+    )
 
 
 def _walk_strings(obj: Any, limit: int = 400) -> Iterable[tuple[str, str]]:
@@ -324,11 +402,34 @@ def selfcheck() -> dict[str, Any]:
         {"cag_host": "x", "csapip": "jtydn.example:9223"}, source="test"
     )
     assert bad is None
+    # #75fixx: customLoginParams → first IPv4 cagList; skip IPv6; ban gate
+    hhht = gateway_from_custom_login_params(
+        {
+            "csapip": "192.168.1.200:30087",
+            "cagList": [
+                {"addr": "2409:8c85::1", "port": 8899, "name": "v6"},
+                {"addr": "36.139.178.146", "port": 8899, "name": "gateway_hhht3_cag1_v4"},
+                {"addr": "36.139.178.189", "port": 8899, "name": "gateway_hhht3_cag2_v4"},
+            ],
+        }
+    )
+    assert hhht is not None
+    assert hhht.cag_host == "36.139.178.146"
+    assert hhht.cag_port == 8899
+    assert hhht.csapip == "192.168.1.200:30087"
+    assert hhht.source == "device_customLoginParams"
+    ban_clp = gateway_from_custom_login_params(
+        {"csapip": "jtydn.example:9223", "cagList": [{"addr": "1.2.3.4", "port": 8899}]}
+    )
+    assert ban_clp is None
+    empty = gateway_from_custom_login_params(None)
+    assert empty is None
     return {
         "ok": True,
         "gateway": gw.as_public_dict(),
         "production_claim": PRODUCTION_CLAIM,
         "pin": PIN_PRODUCT_LINE,
+        "fixx_device_cag": hhht.as_public_dict(),
     }
 
 

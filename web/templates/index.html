@@ -5,7 +5,84 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众移动云电脑保活</title>
 <link rel="icon" type="image/png" href="/static/logo.png?v=logo20260721c">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=theme20260721h">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=fixv20260722b">
+<!-- #75fixr: 穿透/内嵌浏览器常缓存旧 style.css；关键底钮+toast 内联，HTML 一更即生效 -->
+<style id="fixr-mobile-config-actions">
+/* toast 气泡（对齐爱家：底中浮层，不依赖 style.css 缓存） */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 120;
+  max-width: min(480px, calc(100% - 24px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid rgba(20, 40, 80, 0.14);
+  color: #1a2332;
+  box-shadow: 0 8px 24px rgba(20, 40, 80, 0.14);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.toast.hidden { display: none !important; }
+.toast.error {
+  border-color: rgba(228, 0, 20, 0.28);
+  color: #b42318;
+  background: #fff7f7;
+}
+@media (max-width: 520px) {
+  #config-modal .config-modal-fields {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #config-modal .config-modal-fields > .field,
+  #config-modal .config-modal-fields > .field.span-2,
+  #config-modal .config-modal-fields > [class*="span"] {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #config-modal .config-modal-fields input,
+  #config-modal .config-modal-fields select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  #config-modal .modal-actions.config-modal-actions,
+  #config-modal .config-modal-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin: 10px 0 0 !important;
+    padding: 0 !important;
+    justify-content: initial !important;
+    align-items: stretch !important;
+  }
+  #config-modal .config-modal-actions > .btn,
+  #config-modal .config-modal-actions > button {
+    display: flex !important;
+    flex: none !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8px 4px !important;
+    font-size: 12px !important;
+    justify-content: center !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    text-align: center !important;
+  }
+}
+</style>
 </head>
 <body>
 
@@ -151,16 +228,14 @@
       </div>
     </section>
 
-    <section class="global-log-panel" aria-label="运行日志">
+    <section class="global-log-panel" aria-label="运行日志（双击查看全部）">
       <div class="panel-head">
-        <h3>运行日志</h3>
+        <h3>运行日志（双击查看全部）</h3>
         <div class="panel-head-actions">
-          <button type="button" class="btn btn-ghost" id="btn-open-log-full" title="打开完整日志二级页">完整日志</button>
           <button type="button" class="btn btn-ghost" id="btn-clear-log">清空</button>
         </div>
       </div>
-      <div class="log-box log-viewport" id="global-log" title="双击或点「完整日志」打开二级页" role="log" aria-live="polite"></div>
-      <p class="log-hint">约 6 行外露 · 点「完整日志」或双击打开二级页</p>
+      <div class="log-box log-viewport" id="global-log" title="双击查看全部" role="log" aria-live="polite"></div>
       <p class="sys-info" id="sys-info">公众移动云电脑保活 · WebUI · 关掉页面仍在后台运行</p>
     </section>
   </main>
@@ -171,7 +246,7 @@
 <div class="modal log-modal log-full-modal hidden" id="log-full-modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="log-full-title">
   <div class="modal-card log-full-dialog log-full-card log-modal-card">
     <div class="log-full-head modal-head">
-      <h2 id="log-full-title" class="log-full-title">完整日志</h2>
+      <h2 id="log-full-title" class="log-full-title">运行日志</h2>
       <button type="button" class="btn btn-ghost modal-x" id="log-full-close" data-close-log-modal="1" aria-label="关闭" title="关闭">×</button>
     </div>
     <div class="log-box log-full-body log-full-box" id="log-full-body" data-log-modal-body="1" role="log" aria-live="polite"></div>
@@ -224,9 +299,21 @@
       <!-- filled by JS -->
     </div>
     <div class="modal-actions config-modal-actions">
-      <button type="button" class="btn btn-secondary" id="config-modal-login">登录并刷新桌面</button>
+      <button type="button" class="btn btn-secondary" id="config-modal-login">登录</button>
       <button type="button" class="btn btn-primary" id="config-modal-save">保存</button>
-      <button type="button" class="btn btn-ghost" id="config-modal-cancel">取消</button>
+      <button type="button" class="btn btn-danger" id="config-modal-delete">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除确认（对齐爱家：配置弹窗内删除 → 二次确认） -->
+<div class="modal hidden" id="confirm-modal" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+  <div class="modal-card confirm-modal-card">
+    <h3 id="confirm-modal-title">确认</h3>
+    <p id="confirm-modal-body">确定？</p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="confirm-modal-cancel">取消</button>
+      <button type="button" class="btn btn-danger" id="confirm-modal-ok">确定删除</button>
     </div>
   </div>
 </div>
@@ -238,8 +325,8 @@
       <li>本页管理<strong>公众移动云电脑</strong> Path B 保活（非爱家线）。</li>
       <li>上方登录；短信区常显（设备信任/增强策略授权）。</li>
       <li>卡片「启动」= Path B 桌面保活（账号登录态随 CLI 自动开启）；「停止」同步停保活。</li>
+      <li>删除账号在「配置」弹窗内（需二次确认）。</li>
       <li>关掉浏览器后，已启动的保活仍在服务端后台运行。</li>
-      <li>本页仅做保活管理，关掉浏览器后后台仍运行。</li>
       <li>可选「访问密钥」：首次可设置，之后顶栏可改/关；请求带 Bearer。</li>
     </ul>
     <div class="modal-actions">
@@ -247,6 +334,9 @@
     </div>
   </div>
 </div>
+
+<!-- #75fixr: 全局 toast 气泡（发码成功等） -->
+<div class="toast hidden" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
 (function () {
@@ -323,6 +413,21 @@
     if (!msg) { el.hidden = true; el.textContent = ""; return; }
     el.hidden = false;
     el.textContent = msg;
+  }
+
+  // #75fixr: 爱家式底部 toast 气泡（发码/关键提示用，客户一眼可见）
+  function toast(msg, isError) {
+    var el = $("toast");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("error", !!isError);
+    el.classList.remove("hidden");
+    el.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () {
+      el.classList.add("hidden");
+      el.hidden = true;
+    }, 2800);
   }
 
   function fmtKa(ka, defaultMode) {
@@ -435,7 +540,7 @@
           '<select id="cfg-desktop" class="cfg-desktop-select"><option value="">加载中…</option></select>' +
           '<button type="button" class="btn btn-ghost btn-sm" id="cfg-refresh-desktops">刷新</button>' +
         "</div>" +
-        '<p class="field-hint">未登录时请先点底部「登录并刷新桌面」；need_sms 时用下方验证码</p>' +
+        '<p class="field-hint">未登录时请先点底部「登录」；need_sms 时用下方验证码</p>' +
       "</div>" +
       '<div class="field span-2 cfg-sms-block" id="cfg-sms-block">' +
         '<span>短信验证（need_sms 时）</span>' +
@@ -548,6 +653,68 @@
     modal.hidden = true;
     modal.classList.add("hidden");
     modal.setAttribute("aria-hidden", "true");
+  }
+
+  /** 二次确认（对齐爱家 confirmModal） */
+  function confirmModal(title, body, okText) {
+    return new Promise(function (resolve) {
+      var modal = $("confirm-modal");
+      var tEl = $("confirm-modal-title");
+      var bEl = $("confirm-modal-body");
+      var ok = $("confirm-modal-ok");
+      var cancel = $("confirm-modal-cancel");
+      if (!modal || !ok || !cancel) {
+        resolve(window.confirm((title || "") + "\n" + (body || "")));
+        return;
+      }
+      if (tEl) tEl.textContent = title || "确认";
+      if (bEl) bEl.textContent = body || "确定？";
+      ok.textContent = okText || "确定删除";
+      modal.hidden = false;
+      modal.classList.remove("hidden");
+      modal.setAttribute("aria-hidden", "false");
+      var done = function (v) {
+        modal.hidden = true;
+        modal.classList.add("hidden");
+        modal.setAttribute("aria-hidden", "true");
+        ok.onclick = null;
+        cancel.onclick = null;
+        modal.onclick = null;
+        resolve(v);
+      };
+      ok.onclick = function () { done(true); };
+      cancel.onclick = function () { done(false); };
+      modal.onclick = function (ev) {
+        if (ev.target === modal) done(false);
+      };
+    });
+  }
+
+  function onDeleteAccount(id) {
+    if (!id) return Promise.resolve();
+    var acc = state.accounts.find(function (a) { return a.id === id; }) || {};
+    var label = acc.label || acc.username || id;
+    return confirmModal(
+      "删除账号",
+      "确定删除「" + label + "」？删除后无法恢复，进行中的保活也会停止。",
+      "确定删除"
+    ).then(function (ok) {
+      if (!ok) return null;
+      return api("DELETE", "/api/accounts/" + encodeURIComponent(id))
+        .then(function (res) {
+          if (res && res.ok === false) {
+            showCErr(res.error || res.message || "删除失败");
+            return;
+          }
+          showCOk("已删除 " + label);
+          if (state.configPid === id) closeConfigModal();
+          if (state.currentId === id) state.currentId = null;
+          return loadAccounts();
+        })
+        .catch(function (e) {
+          showCErr((e && e.message) || "删除失败");
+        });
+    });
   }
 
   function saveConfigModal() {
@@ -678,7 +845,7 @@
           return '<div class="log-line level-' + lv + '">' + esc(String(t)) + "</div>";
         }).join("");
       } else {
-        logHtml = '<div class="log-line level-info">暂无日志 · 双击打开完整日志</div>';
+        logHtml = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
       }
       /* 对齐爱家 cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
       var startStopBtn = running
@@ -704,7 +871,7 @@
           "<div><span>账号保活</span><strong>" + esc(aka.running ? "自动·运行中" : "自动·待命") + "</strong></div>" +
           "<div><span>心跳</span><strong>" + esc(k.heart || "-") + "</strong></div>" +
           "<div><span>轮次</span><strong>" + esc(String(k.rounds || "-")) + "</strong></div>" +
-          "<div><span>桌面ID</span><strong>" + esc(deskId ? deskId.slice(0, 14) + (deskId.length > 14 ? "…" : "") : "—") + "</strong></div>" +
+          "<div><span>在线时长</span><strong>" + esc(k.uptime && k.uptime !== "-" ? k.uptime : "—") + "</strong></div>" +
         "</div>" +
         (errLine ? '<p class="card-error" role="alert">' + esc(errLine) + "</p>" : "") +
         '<div class="card-surface">' +
@@ -715,7 +882,7 @@
             '<button type="button" class="btn btn-ghost btn-danger-ghost" data-act="clear-logs" title="清空本卡片日志（不影响保活任务）">清除日志</button>' +
           "</div>" +
           '<div class="card-log card-log-expanded" data-act="log-open" title="双击日志查看完整记录">' +
-            '<div class="log-panel-head"><span>日志（常显最近 6 条；双击看全部）</span></div>' +
+            '<div class="log-panel-head"><span>运行日志（双击查看全部）</span></div>' +
             '<div class="log-box">' + logHtml + "</div>" +
           "</div>" +
         "</div>";
@@ -783,7 +950,7 @@
     if (!box) return;
     var logs = entries.slice(-6);
     if (!logs.length) {
-      box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击打开完整日志</div>';
+      box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
     } else {
       box.innerHTML = logs.map(function (line) {
         var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
@@ -854,16 +1021,32 @@
     });
   }
 
+  // #75fixr: 仅当表单账号与 current 卡 username 一致时复用；否则新建第二张卡
+  // （旧逻辑无脑复用 currentId，导致第二账号登录覆盖第一张卡）
   function ensureAccount() {
-    if (state.currentId) {
-      return Promise.resolve(state.currentId);
-    }
     var username = $("c-username").value.trim();
     var password = $("c-password").value;
     var label = $("c-label").value.trim();
     if (!username || !password) {
       showCErr("请输入账号和密码");
       return Promise.reject(new Error("missing creds"));
+    }
+    if (state.currentId) {
+      var cur = state.accounts.find(function (a) { return a.id === state.currentId; });
+      var curUser = ((cur && cur.username) || "").trim();
+      if (curUser && curUser === username) {
+        return Promise.resolve(state.currentId);
+      }
+      // 表单账号不同 → 明确新建，避免 login 改写已有卡
+      state.currentId = null;
+    }
+    // 若列表里已有同 username 的卡，复用该卡（不重复建）
+    var exist = state.accounts.find(function (a) {
+      return ((a.username || "").trim() === username);
+    });
+    if (exist && exist.id) {
+      state.currentId = exist.id;
+      return Promise.resolve(exist.id);
     }
     return api("POST", "/api/accounts", {
       label: label || username,
@@ -929,14 +1112,18 @@
     }).then(function (res) {
       if (res.ok === false) {
         showCErr(res.error || "自动发送验证码失败，可点「重发」");
+        toast(res.error || "验证码发送失败", true);
         return res;
       }
-      showCOk("验证码已发送至 " + maskMobile(res.mobile || mobile) + "，请填写短信验证码");
+      var okMsg = "验证码发送成功 · 已发至 " + maskMobile(res.mobile || mobile);
+      showCOk(okMsg + "，请填写短信验证码");
+      toast("验证码发送成功");
       startSendCooldown($("c-send-sms"));
       try { $("c-code").focus(); } catch (e) {}
       return res;
     }).catch(function (e) {
       showCErr(e.message || String(e));
+      toast(e.message || "验证码发送失败", true);
     });
   }
 
@@ -1146,13 +1333,20 @@
     btn.disabled = true;
     api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/send-sms", { mobile: mobile })
       .then(function (res) {
-        if (res.ok === false) { showCErr(res.error || "发送失败"); btn.disabled = false; return; }
+        if (res.ok === false) {
+          showCErr(res.error || "发送失败");
+          toast(res.error || "验证码发送失败", true);
+          btn.disabled = false;
+          return;
+        }
         if (res.mobile) setSmsMobile(res.mobile);
         showCOk("验证码已发送至 " + maskMobile(res.mobile || mobile));
+        toast("验证码发送成功");
         startSendCooldown(btn);
         try { $("c-code").focus(); } catch (e) {}
       }).catch(function (e) {
         showCErr(e.message);
+        toast(e.message || "验证码发送失败", true);
         btn.disabled = false;
       });
   };
@@ -1270,14 +1464,7 @@
         openLogFull();
       });
     }
-    // 对齐爱家：面板「完整日志」按钮打开二级页（z-index 高于其它 modal）
-    var openBtn = $("btn-open-log-full");
-    if (openBtn) {
-      openBtn.addEventListener("click", function (ev) {
-        ev.preventDefault();
-        openLogFull();
-      });
-    }
+    // 完整日志按钮已删；对齐爱家：双击运行日志打开二级页
     var closeBtn = $("log-full-close");
     if (closeBtn) closeBtn.addEventListener("click", closeLogFull);
     var modal = $("log-full-modal");
@@ -1425,14 +1612,17 @@
   // config modal binds (once at parse time; NOT inside poll interval)
   (function bindConfigModal() {
     var closeBtn = $("config-modal-close");
-    var cancelBtn = $("config-modal-cancel");
     var saveBtn = $("config-modal-save");
     var loginBtn = $("config-modal-login");
+    var delBtn = $("config-modal-delete");
     var modal = $("config-modal");
     if (closeBtn) closeBtn.addEventListener("click", closeConfigModal);
-    if (cancelBtn) cancelBtn.addEventListener("click", closeConfigModal);
     if (saveBtn) saveBtn.addEventListener("click", saveConfigModal);
     if (loginBtn) loginBtn.addEventListener("click", loginFromConfigModal);
+    if (delBtn) delBtn.addEventListener("click", function () {
+      var id = state.configPid || state.currentId;
+      if (id) onDeleteAccount(id);
+    });
     if (modal) modal.addEventListener("click", function (ev) {
       if (ev.target === modal) closeConfigModal();
     });

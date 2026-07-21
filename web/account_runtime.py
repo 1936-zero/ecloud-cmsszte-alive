@@ -33,6 +33,10 @@ import desktop_list
 import desktop_session
 import login
 from ecloud_client import EcloudError, EcloudHttpUtil
+from l3.gateway_config import (
+    gateway_from_custom_login_params,
+    merge_gateway_into_cloud_pc,
+)
 from web.keepalive_manager import AccountKeepaliveManager, KeepaliveManager
 
 log = logging.getLogger("web.account_runtime")
@@ -183,6 +187,57 @@ class AccountRuntime:
                     tmp.unlink()
             except Exception:
                 pass
+
+    def _gateway_needs_refresh(self) -> bool:
+        """#75fixy: weak/missing gateway must re-read customLoginParams."""
+        src = str(self._cfg.get("gateway_source") or "").strip().lower()
+        host = str(self._cfg.get("cag_host") or "").strip()
+        if not host:
+            return True
+        # default / account_weak / empty source = not device-region CAG
+        if not src or src in {"default", "account_weak", "fallback", "env"}:
+            return True
+        if "device" in src or "customlogin" in src.replace("_", "").lower():
+            return False
+        # any non-device source is treated as weak for region CAG
+        return src not in {"cli", "manual", "user"}
+
+    def _apply_desktop_gateway_locked(self, desktop) -> bool:
+        """Write region CAG from desktop.custom_login_params into self._cfg (lock held).
+
+        Returns True if cfg was updated. Caller saves.
+        """
+        clp = getattr(desktop, "custom_login_params", None)
+        if not clp:
+            return False
+        try:
+            gw = gateway_from_custom_login_params(clp)
+        except Exception as e:
+            self.log("INFO", f"parse customLoginParams skip: {type(e).__name__}")
+            return False
+        if gw is None:
+            return False
+        before = (
+            str(self._cfg.get("cag_host") or ""),
+            str(self._cfg.get("cag_port") or ""),
+            str(self._cfg.get("csapip") or ""),
+            str(self._cfg.get("gateway_source") or ""),
+        )
+        # force overwrite weak/default; device clp is authoritative for this desktop
+        self._cfg = merge_gateway_into_cloud_pc(self._cfg, gw, only_missing=False)
+        after = (
+            str(self._cfg.get("cag_host") or ""),
+            str(self._cfg.get("cag_port") or ""),
+            str(self._cfg.get("csapip") or ""),
+            str(self._cfg.get("gateway_source") or ""),
+        )
+        if before != after:
+            self.log(
+                "INFO",
+                f"gateway_device={after[0]}:{after[1]} src={after[3]}",
+            )
+            return True
+        return False
 
     def _load_logs_tail(self, max_lines: int = 200) -> None:
         if not self.logs_path.is_file():
@@ -686,6 +741,8 @@ class AccountRuntime:
                     self._cfg["instance_id"] = instance_id
                     self._cfg["machine_id"] = machine_id
                     self._cfg["machine_name"] = getattr(selected, "machine_name", "") or ""
+                    # #75fixy: region CAG from machineList[].customLoginParams
+                    self._apply_desktop_gateway_locked(selected)
                     self._cfg["updated_at"] = _now_iso()
                     self._save_cfg()
             except EcloudError as e:
@@ -693,15 +750,17 @@ class AccountRuntime:
         else:
             if not machine_id and self._cfg.get("instance_id") == instance_id:
                 machine_id = str(self._cfg.get("machine_id") or "")
-            if not machine_id:
+            matched_desktop = None
+            if not machine_id or self._gateway_needs_refresh():
                 try:
                     desktops = _call_with_relogin(lambda: desktop_list.get_desktop_list(http))
                     for d in desktops:
                         if d.instance_id == instance_id:
-                            machine_id = d.machine_id
+                            machine_id = machine_id or d.machine_id
+                            matched_desktop = d
                             break
                 except EcloudError as e:
-                    self.log("INFO", f"machine_id lookup failed: {e.message}")
+                    self.log("INFO", f"machine_id/gateway lookup failed: {e.message}")
             try:
                 uptime = _call_with_relogin(lambda: _preflight_uptime(http, instance_id))
                 self.log("INFO", f"preflight ok instance={instance_id[:20]} uptime={uptime}")
@@ -711,6 +770,10 @@ class AccountRuntime:
                 self._cfg["instance_id"] = instance_id
                 if machine_id:
                     self._cfg["machine_id"] = machine_id
+                if matched_desktop is not None:
+                    if getattr(matched_desktop, "machine_name", None):
+                        self._cfg["machine_name"] = matched_desktop.machine_name or ""
+                    self._apply_desktop_gateway_locked(matched_desktop)
                 self._cfg["updated_at"] = _now_iso()
                 self._save_cfg()
 
@@ -754,7 +817,7 @@ class AccountRuntime:
         Never raise — login success must still return to the UI.
         """
         try:
-            if self.aka.running:
+            if self.aka.is_running() or getattr(self.aka, "running", False):
                 return {"ok": True, "already": True}
             # Prefer persisted interval; fall back to default 300s.
             interval = None

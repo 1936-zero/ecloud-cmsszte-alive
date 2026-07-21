@@ -709,24 +709,34 @@ img.brand-mark {
 #log-full-modal[hidden] {
   display: none !important;
 }
+/* #75fixv: force log secondary page = aijia size on desktop+mobile
+   root cause was .modal-card{max-width:480} + .log-box{max-height:160/200}
+   shrinking the dialog when content is short — use fixed height + !important */
 .log-full-dialog,
 .log-full-card,
+.log-modal-card,
 #log-full-modal .log-full-dialog,
-#log-full-modal .log-full-card {
+#log-full-modal .log-full-card,
+#log-full-modal .modal-card,
+#log-full-modal .modal-card.log-full-dialog {
   position: relative;
   z-index: 1201 !important;
-  width: min(720px, 96vw);
-  max-height: min(80vh, 720px);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 16px 40px rgba(15, 18, 28, 0.18);
-  overflow: hidden;
-  padding: 0;
-  max-width: min(720px, 96vw);
+  width: min(720px, 96vw) !important;
+  max-width: min(720px, 96vw) !important;
+  /* force same footprint as aijia (not content-sized shrink) */
+  height: min(80vh, 720px) !important;
+  max-height: min(80vh, 720px) !important;
+  min-height: min(80vh, 720px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: var(--bg-elev) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: 0 16px 40px rgba(15, 18, 28, 0.18) !important;
+  overflow: hidden !important;
+  padding: 0 !important;
   pointer-events: auto !important;
+  box-sizing: border-box !important;
 }
 .log-full-head,
 #log-full-modal .log-full-head,
@@ -737,6 +747,7 @@ img.brand-mark {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex: 0 0 auto;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
@@ -748,20 +759,27 @@ img.brand-mark {
   font-weight: 600;
   color: var(--text);
 }
+/* kill .log-box max-height:160/200 when inside full modal */
 .log-full-body,
-.log-full-box {
-  flex: 1 1 auto;
-  min-height: 240px;
-  max-height: calc(80vh - 56px);
-  overflow: auto;
-  padding: 10px 12px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.45;
-  background: #fafafa;
-  border: none;
-  border-radius: 0;
-  cursor: text;
+.log-full-box,
+#log-full-modal .log-full-body,
+#log-full-modal .log-full-box,
+#log-full-modal .log-box,
+#log-full-modal .log-box.log-full-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: auto !important;
+  padding: 10px 12px !important;
+  font-family: var(--mono) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  background: #fafafa !important;
+  border: none !important;
+  border-radius: 0 !important;
+  cursor: text !important;
+  box-sizing: border-box !important;
 }
 .log-full-body .log-line,
 .log-full-box .log-line {
@@ -1385,11 +1403,12 @@ body.log-modal-open {
   .card, .account-card {
     padding: 14px 12px;
   }
-  .card-actions, .card-config {
+  /* #75fixu: card-actions stay aijia-row; only .card-config stacks */
+  .card-config {
     flex-direction: column;
     align-items: stretch;
   }
-  .card-actions .btn, .card-config .btn {
+  .card-config .btn {
     width: 100%;
   }
   .log-box { max-height: 200px; font-size: 12px; }
@@ -1872,9 +1891,111 @@ body.log-modal-open {
   font-size: 12px;
   margin: 0 0 8px;
 }
-.config-modal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+/* #75fixo: 登录|保存|删除 右对齐并列一排；无取消；关闭靠右上 × */
+.config-modal-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100%;
+  margin-top: 10px;
+}
+.config-modal-actions .btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+.config-modal-actions #config-modal-delete {
+  margin-right: 0;
+}
+#confirm-modal { z-index: 80; }
+#confirm-modal .confirm-modal-card { max-width: 420px; }
+#confirm-modal #confirm-modal-body { margin: 8px 0 16px; color: var(--text, #333); line-height: 1.5; }
+
+/* 配置弹窗移动端适配（抄爱家：单列字段 + 底钮强制单排均分） */
 @media (max-width: 520px) {
-  .config-modal-fields { grid-template-columns: 1fr; }
+  #config-modal .config-modal-card {
+    width: 100%;
+    max-width: 100%;
+    max-height: min(94vh, 900px);
+    border-radius: 10px;
+    margin: 0;
+  }
+  #config-modal .modal-head {
+    gap: 8px;
+  }
+  #config-modal .modal-head h2,
+  #config-modal #config-modal-title {
+    font-size: 14px;
+  }
+  .config-modal-fields {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  /* #75fixp: 字段全宽（含显示名），避免 2 列半宽导致底钮与显示名错位 */
+  .config-modal-fields > .field,
+  .config-modal-fields .field.span-2,
+  .config-modal-fields .span-2 {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+  }
+  .config-modal-fields .field input,
+  .config-modal-fields input[type="text"],
+  .config-modal-fields input[type="password"],
+  .config-modal-fields input[type="number"],
+  .config-modal-fields select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .config-modal-fields .field-row {
+    flex-wrap: wrap;
+    width: 100% !important;
+  }
+  /* #75fixq: 真机 WebKit 上 flex:1+button 偶发不撑满 → grid 三等分更稳 */
+  .config-modal-actions,
+  #config-modal .config-modal-actions,
+  #config-modal .modal-actions.config-modal-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin: 10px 0 0 !important;
+    padding: 0 !important;
+    justify-content: initial !important;
+    align-items: stretch !important;
+  }
+  .config-modal-actions .btn,
+  #config-modal .config-modal-actions .btn,
+  #config-modal .config-modal-actions #config-modal-login,
+  #config-modal .config-modal-actions #config-modal-save,
+  #config-modal .config-modal-actions #config-modal-delete {
+    display: flex !important;
+    flex: none !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8px 4px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    text-align: center !important;
+    justify-content: center !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+  }
 }
 
 
@@ -1914,4 +2035,102 @@ body.log-modal-open {
   color: var(--danger) !important;
   border-color: rgba(228, 0, 20, 0.25) !important;
   background-image: none !important;
+}
+
+/* ========== #75fixu: mobile card = aijia (inline summary + 4-btn row) ========== */
+/* Desktop unchanged: base span/strong stay block; only max-width:720 overrides. */
+@media (max-width: 720px) {
+  .card-summary,
+  .card .card-summary,
+  .timeline .card .card-summary {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px 10px !important;
+    padding: 0 14px 10px !important;
+    font-size: 12px !important;
+    line-height: 1.35 !important;
+  }
+  .card-summary > div,
+  .card .card-summary > div {
+    min-width: 0 !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+  }
+  /* aijia HARD_GATE#862: label + value same line */
+  .card-summary span,
+  .card .card-summary span {
+    display: inline !important;
+    font-size: 12px !important;
+    color: var(--text-dim) !important;
+  }
+  .card-summary strong,
+  .card .card-summary strong {
+    display: inline !important;
+    margin-top: 0 !important;
+    margin-left: 2px !important;
+    font-weight: 600 !important;
+    color: var(--text) !important;
+    word-break: break-word !important;
+    white-space: normal !important;
+  }
+  /* kill residual column; equal-width row = log box */
+  .card-surface .card-actions,
+  .card .card-actions,
+  .timeline .card .card-actions {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    margin-bottom: 6px !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  .card-surface .card-actions .btn,
+  .card .card-actions .btn,
+  .timeline .card .card-actions .btn {
+    flex: 1 1 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 6px 4px !important;
+    min-height: 32px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    text-align: center !important;
+  }
+}
+
+
+/* #75fixv HARD_GATE log-full size end — beat any later .log-box/.modal-card rules */
+#log-full-modal .modal-card,
+#log-full-modal .log-full-dialog,
+#log-full-modal .log-full-card,
+#log-full-modal .log-modal-card {
+  width: min(720px, 96vw) !important;
+  max-width: min(720px, 96vw) !important;
+  height: min(80vh, 720px) !important;
+  max-height: min(80vh, 720px) !important;
+  min-height: min(80vh, 720px) !important;
+  padding: 0 !important;
+}
+#log-full-modal .log-box,
+#log-full-modal .log-full-body,
+#log-full-modal .log-full-box {
+  max-height: none !important;
+  min-height: 0 !important;
+  flex: 1 1 auto !important;
+  overflow: auto !important;
+}
+@media (max-width: 720px) {
+  #log-full-modal .modal-card,
+  #log-full-modal .log-full-dialog,
+  #log-full-modal .log-full-card {
+    width: min(720px, 96vw) !important;
+    max-width: 96vw !important;
+    height: min(80vh, 720px) !important;
+    max-height: min(80vh, 720px) !important;
+    min-height: min(80vh, 720px) !important;
+  }
 }

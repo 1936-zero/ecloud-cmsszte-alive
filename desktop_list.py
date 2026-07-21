@@ -29,6 +29,8 @@ class Desktop:
     origin_company_code: str = ""   # CMSSZTE / ZTE / H3C / Inspur
     resource_pool_uid: str = ""
     status: str = ""          # 来自 getDesktopStatus
+    # #75fixx: machineList[].customLoginParams (dict|raw) → region CAG
+    custom_login_params: dict | str | None = None
 
     def __repr__(self):
         return (f"Desktop(instance={self.instance_id[:20]}..., "
@@ -51,12 +53,16 @@ def get_desktop_list(http: EcloudHttpUtil) -> list[Desktop]:
     for m in machine_list:
         if not isinstance(m, dict):
             continue
+        clp = m.get("customLoginParams")
+        if clp is None:
+            clp = m.get("custom_login_params")
         d = Desktop(
             instance_id=m.get("instanceId", ""),
             machine_id=m.get("machineId", ""),
             machine_name=m.get("machineName", ""),
             origin_company_code=m.get("originCompanyCode", ""),
             resource_pool_uid=m.get("resourcePoolUid", ""),
+            custom_login_params=clp if clp not in ("", None) else None,
         )
         if d.instance_id or d.machine_id:
             desktops.append(d)

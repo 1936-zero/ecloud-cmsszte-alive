@@ -24,6 +24,9 @@ except ImportError:  # pragma: no cover
 DEFAULT_INI_CANDIDATES = [
     Path("/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini"),
     Path("/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/ZTE/config/installinfo.ini"),
+    # Docker / data volume fallback (minimal [PublicKey] csap_id)
+    Path("/app/data/config/installinfo.ini"),
+    Path(__file__).resolve().parent.parent / "data" / "config" / "installinfo.ini",
 ]
 
 def parse_installinfo(path: Path | None = None) -> dict:

@@ -142,17 +142,36 @@ def _make_log_entry(previous_seq: int, level: str, msg: str) -> tuple[int, dict]
 
 
 def _safe_public_err(msg: str) -> str:
-    """Strip potential secrets from error strings before UI log."""
+    """Strip potential secrets from error strings before UI log.
+
+    #75fixv: do NOT whole-string redact when only the *word* connectStr/no_connectStr
+    appears (CAG 501 status). Keep result_code / http status so UI is actionable.
+    """
     if not msg:
         return ""
-    low = msg.lower()
-    for ban in ("connectstr", "password", "access_token", "refresh_token", "plain="):
-        if ban in low:
-            return "error(redacted)"
-    # never echo long base64-looking blobs
-    if len(msg) > 400:
-        return msg[:200] + "…(truncated)"
-    return msg
+    import re
+
+    s = str(msg)
+    # redact key=value secret forms (keep key name)
+    s = re.sub(
+        r"(?i)\b(connectstr|password|access_token|refresh_token|plain)\s*[=:]\s*[^\s,;|]+",
+        r"\1=(redacted)",
+        s,
+    )
+    # long base64/hex blobs (≥48 continuous)
+    s = re.sub(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{48,}(?![A-Za-z0-9+/=_-])", "(blob)", s)
+    # known public mint failure — map to friendly Chinese (no secrets)
+    low = s.lower()
+    if "no_connectstr" in low or ("result=501" in low and "connect" in low):
+        return (
+            "mint失败: CAG result=501 no_connectStr "
+            "(桌面可能关机/未就绪或 vmid 无效，请先开机后重试)"
+        )
+    if "result=501" in low:
+        return "mint失败: CAG result=501 (桌面会话不可用，请先开机后重试)"
+    if len(s) > 400:
+        return s[:200] + "…(truncated)"
+    return s
 
 
 class AccountKeepaliveManager:
@@ -173,6 +192,11 @@ class AccountKeepaliveManager:
         self._logs: deque[dict] = deque(maxlen=200)
 
     def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def running(self) -> bool:
+        """Alias for is_running(); account_runtime autostart reads `.running`."""
         return self._running
 
     def get_status(self) -> dict:
@@ -382,6 +406,11 @@ class KeepaliveManager:
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def running(self) -> bool:
+        """Alias for is_running(); keep attribute-style checks consistent."""
+        return self._running
+
     def get_status(self) -> dict:
         with self._lock:
             if not self._running:
@@ -531,6 +560,77 @@ class KeepaliveManager:
         )
         return str(host).strip() or _DEFAULT_CAG_HOST
 
+    def _gateway_source_weak(self, cfg: dict) -> bool:
+        """#75fixy: plain may exist while cag_host is still GZ4 default."""
+        src = str(cfg.get("gateway_source") or "").strip().lower()
+        host = str(cfg.get("cag_host") or "").strip()
+        if not host:
+            return True
+        if not src or src in {"default", "account_weak", "fallback", "env"}:
+            return True
+        if "device" in src or "customlogin" in src.replace("_", "").lower():
+            return False
+        return src not in {"cli", "manual", "user"}
+
+    def _refresh_gateway_from_desktop(
+        self,
+        http: EcloudHttpUtil,
+        instance_id: str,
+        machine_id: str,
+        cfg: dict,
+    ) -> dict:
+        """Re-list desktop and force-write customLoginParams → region CAG (#75fixy)."""
+        try:
+            from desktop_list import get_desktop_list
+            from l3.gateway_config import (
+                gateway_from_custom_login_params,
+                merge_gateway_into_cloud_pc,
+            )
+        except Exception as e:
+            self._log("INFO", f"gateway refresh import skip: {_safe_public_err(str(e))}")
+            return cfg
+        try:
+            desktops = get_desktop_list(http)
+        except Exception as e:
+            self._log("INFO", f"gateway refresh list skip: {_safe_public_err(str(e))}")
+            return cfg
+        matched = None
+        for d in desktops or []:
+            if instance_id and d.instance_id == instance_id:
+                matched = d
+                break
+            if machine_id and d.machine_id == machine_id:
+                matched = d
+                break
+        if matched is None:
+            self._log("INFO", "gateway refresh: desktop not found in list")
+            return cfg
+        clp = getattr(matched, "custom_login_params", None)
+        if not clp:
+            self._log("INFO", "gateway refresh: no customLoginParams on desktop")
+            return cfg
+        try:
+            gw = gateway_from_custom_login_params(clp)
+        except Exception as e:
+            self._log("INFO", f"gateway refresh parse skip: {_safe_public_err(str(e))}")
+            return cfg
+        if gw is None:
+            return cfg
+        before = (cfg.get("cag_host"), cfg.get("cag_port"), cfg.get("gateway_source"))
+        cfg = merge_gateway_into_cloud_pc(cfg, gw, only_missing=False)
+        try:
+            self._save_cfg_local(cfg)
+        except Exception:
+            pass
+        after = (cfg.get("cag_host"), cfg.get("cag_port"), cfg.get("gateway_source"))
+        if before != after:
+            self._log(
+                "INFO",
+                f"gateway_device={cfg.get('cag_host')}:{cfg.get('cag_port')} "
+                f"src={cfg.get('gateway_source')}",
+            )
+        return cfg
+
     def _ensure_plain(
         self,
         http: EcloudHttpUtil,
@@ -538,12 +638,34 @@ class KeepaliveManager:
         machine_id: str,
         plain: Path,
     ) -> bool:
-        """If connectStr plain missing/empty, run product_setup mint (power once + mint)."""
+        """Ensure plain exists; #75fixy also refresh weak gateway even if plain present."""
+        cfg = self._load_cfg_local()
+        plain_ok = False
         try:
-            if plain.is_file() and plain.stat().st_size > 0:
-                return True
+            plain_ok = plain.is_file() and plain.stat().st_size > 0
         except OSError:
-            pass
+            plain_ok = False
+
+        # Always correct weak/default CAG before Path B (plain alone is not enough).
+        if self._gateway_source_weak(cfg):
+            self._log("INFO", "gateway 源偏弱/默认，从桌面 customLoginParams 刷新区域 CAG…")
+            cfg = self._refresh_gateway_from_desktop(
+                http,
+                instance_id or str(cfg.get("instance_id") or ""),
+                machine_id or str(cfg.get("machine_id") or ""),
+                cfg,
+            )
+            # reload after save
+            cfg = self._load_cfg_local() or cfg
+
+        if plain_ok:
+            host = self._resolve_cag_host(cfg)
+            self._log(
+                "INFO",
+                f"会话凭证已存在，跳过 mint；Path B host={host} "
+                f"src={cfg.get('gateway_source') or ''}",
+            )
+            return True
 
         self._log("INFO", "未找到会话凭证文件，正在准备（仅首次开机 + 签发）…")
         try:
@@ -561,9 +683,11 @@ class KeepaliveManager:
             self._log("ERROR", f"加载 product_setup 失败: {_safe_public_err(str(e))}")
             return False
 
-        cfg = self._load_cfg_local()
-
         try:
+            # #75fixr: WebUI 默认 25s 对慢链路 mint 不够；CLI 侧常能过。
+            # 与 product_setup 调用对齐拉长读超时，避免 Read timed out. (read timeout=25.0)
+            # #75fixw: mint 501/no_connectStr → force power + wait + remint
+            # （默认 mint_power_retry=True / power_wait=DEFAULT_POWER_WAIT_S，与 CLI 共用）
             result = run_product_setup(
                 cfg=cfg,
                 client=http,
@@ -575,6 +699,9 @@ class KeepaliveManager:
                 do_path_b=False,
                 instance_id=instance_id or str(cfg.get("instance_id") or ""),
                 machine_id=machine_id or str(cfg.get("machine_id") or ""),
+                mint_timeout=float(os.environ.get("CLOUD_PC_MINT_TIMEOUT", "90") or 90),
+                power_wait_s=float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15),
+                mint_power_retry=True,
             )
         except Exception as e:
             self._log("ERROR", f"准备失败: {_safe_public_err(str(e))}")

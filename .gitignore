@@ -1,6 +1,8 @@
 # Credentials / secrets
 cloud_pc.json
 **/cloud_pc.json
+cloud_pc*.json
+**/cloud_pc*.json
 cloud_pc.json.bak
 *.plain
 **/*.plain

@@ -411,6 +411,19 @@ def create_app() -> Flask:
     # 启动时加载配置
     _app_state["cfg"] = _load_cfg()
 
+    # #75fixr: 穿透/内嵌浏览器常缓存旧 HTML/CSS；对页面与静态资源禁缓存
+    @app.after_request
+    def _no_cache_ui(resp):
+        try:
+            path = request.path or "/"
+            if path in ("/", "/dashboard", "/index.html") or path.startswith("/static/"):
+                resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+                resp.headers["Pragma"] = "no-cache"
+                resp.headers["Expires"] = "0"
+        except Exception:
+            pass
+        return resp
+
     # -----------------------------------------------------------------------
     # 页面
     # -----------------------------------------------------------------------

@@ -4,6 +4,8 @@ services:
     image: ecloud-cmsszte-alive:local
     container_name: ecloud-cmsszte-alive
     user: "1000:1000"
+    # CAG mint (cs_suOperDesktop) times out on bridge NAT; host net matches CLI.
+    network_mode: host
     environment:
       TZ: Asia/Shanghai
       HOME: /tmp
@@ -15,7 +17,8 @@ services:
       PIN_PRODUCT_LINE: public_ecloud_9222
     volumes:
       - ./data:/app/data
-    ports:
-      - "8081:8080"
+      # AesDecodeConnStr needs PublicKey.csap_id (same path as host CLI client)
+      - /opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
+    # host network: bind 8081 on host (same public URL as before)
     restart: unless-stopped
-    command: ["web", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["web", "--host", "0.0.0.0", "--port", "8081"]

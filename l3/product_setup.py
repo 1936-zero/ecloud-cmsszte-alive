@@ -30,6 +30,23 @@ DEFAULT_POST = str(_REPO_ROOT / "assets/templates/post")
 # Fallback nest capture if assets missing
 _NEST_PRE = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/pre"
 _NEST_POST = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/post"
+# #75fixw: after operate=available wait before mint (SaaS running ≠ CAG ready)
+DEFAULT_POWER_WAIT_S = float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15)
+# mint 501/no_connectStr recovery: force power + wait + remint once (CLI/WebUI shared)
+DEFAULT_MINT_POWER_RETRY = True
+
+
+def _is_recoverable_mint_err(err: str) -> bool:
+    """CAG 501 no_connectStr / desktop not ready for mint → worth force-power once."""
+    e = (err or "").lower()
+    if "no_connectstr" in e:
+        return True
+    if "result=501" in e or "result_code=501" in e:
+        return True
+    # loose: 501 + connect context
+    if "501" in e and "connect" in e:
+        return True
+    return False
 
 
 @dataclass
@@ -109,11 +126,18 @@ def run_product_setup(
     instance_id: str = "",
     machine_id: str = "",
     mint_timeout: float = 25.0,
-    power_wait_s: float = 0.0,
+    power_wait_s: float = DEFAULT_POWER_WAIT_S,
+    mint_power_retry: bool = DEFAULT_MINT_POWER_RETRY,
     dry_run: bool = False,
     path_b_out_dir: str | Path | None = None,
 ) -> SetupResult:
-    """Run customer-facing setup chain. Never logs plain/token secrets."""
+    """Run customer-facing setup chain. Never logs plain/token secrets.
+
+    #75fixw recovery (CLI + WebUI shared):
+    if first mint fails with CAG 501/no_connectStr and do_power:
+      force ensure_powered_once (bypass already_running) → wait → remint once.
+    Daily Path B keepalive still never re-powers (power_on_done gate).
+    """
     notes: list[str] = []
     from l3.gateway_config import (
         merge_gateway_into_cloud_pc,
@@ -170,6 +194,39 @@ def run_product_setup(
     if getattr(desktop, "machine_name", None):
         cfg["machine_name"] = desktop.machine_name
     save_config(cfg)
+
+    # --- #75fixx region CAG from device customLoginParams ---
+    # Default/stock CAG is GZ4 (36.212.224.105). HHHT3 / other regions ship
+    # their own cagList; minting against the wrong CAG → result=501
+    # 「查询虚机状态异常，请确认虚机是否存在！」. Device list is authoritative
+    # over default / stale cloud_pc; never override explicit/env.
+    try:
+        from l3.gateway_config import gateway_from_custom_login_params
+
+        clp = getattr(desktop, "custom_login_params", None)
+        dev_gw = gateway_from_custom_login_params(clp) if clp else None
+        src = (gw.source or "")
+        allow_device = not (
+            src.startswith("explicit") or src.startswith("env")
+        )
+        if dev_gw and allow_device:
+            if (
+                src == "default"
+                or src.startswith("client_config")
+                or src.startswith("cloud_pc")
+                or (dev_gw.cag_host and dev_gw.cag_host != gw.cag_host)
+            ):
+                gw = dev_gw
+                cfg = merge_gateway_into_cloud_pc(cfg, gw, only_missing=False)
+                save_config(cfg)
+                notes.append(
+                    f"gateway_device={gw.cag_host}:{gw.cag_port} src={gw.source}"
+                )
+                result.gateway = gw.as_public_dict()
+                result.notes = notes
+    except Exception as e:
+        notes.append(f"gateway_device_skip:{type(e).__name__}")
+        result.notes = notes
 
     # --- power once ---
     if do_power:
@@ -232,10 +289,69 @@ def run_product_setup(
                 "cag": f"{gw.cag_host}:{gw.cag_port}",
             }
             if not result.mint["ok"]:
-                result.error = result.mint["error"] or "mint_failed"
-                result.stage = "mint"
-                result.notes = notes
-                return result
+                mint_err = result.mint["error"] or "mint_failed"
+                # #75fixw: SaaS already_running skip may leave CAG unready → force power once
+                if (
+                    do_power
+                    and mint_power_retry
+                    and _is_recoverable_mint_err(mint_err)
+                ):
+                    wait_rec = (
+                        float(power_wait_s)
+                        if float(power_wait_s or 0) > 0
+                        else DEFAULT_POWER_WAIT_S
+                    )
+                    notes.append(
+                        f"mint_recover: first mint failed ({mint_err[:120]}); "
+                        f"force operate=available + wait {wait_rec}s + remint once"
+                    )
+                    log.warning(
+                        "mint recoverable fail → force power + wait %.1fs + remint: %s",
+                        wait_rec,
+                        mint_err[:160],
+                    )
+                    from l3.desktop_power_once import ensure_powered_once
+
+                    power_initial = dict(result.power or {})
+                    pr2 = ensure_powered_once(
+                        client,
+                        cfg,
+                        desktop=desktop,
+                        force=True,
+                        wait_s=wait_rec,
+                        save_cfg_fn=save_config,
+                    )
+                    result.power = {
+                        "initial": power_initial,
+                        "retry": pr2.as_public_dict(),
+                    }
+                    notes.extend(
+                        [f"mint_recover_power:{n}" for n in (pr2.notes or [])]
+                    )
+                    mr2 = mint_connectstr(
+                        req, plain_path=plain, write_plain=True, dry_run=False
+                    )
+                    result.mint = {
+                        "ok": bool(getattr(mr2, "ok", False)),
+                        "error": getattr(mr2, "error", "") or "",
+                        "plain_path": str(plain),
+                        "plain_bytes": plain.stat().st_size if plain.is_file() else 0,
+                        "vmid": vmid,
+                        "cag": f"{gw.cag_host}:{gw.cag_port}",
+                        "recovered": True,
+                        "first_error": mint_err,
+                    }
+                    if not result.mint["ok"]:
+                        result.error = result.mint["error"] or mint_err
+                        result.stage = "mint"
+                        result.notes = notes
+                        return result
+                    notes.append("mint_recover: remint OK after force power")
+                else:
+                    result.error = mint_err
+                    result.stage = "mint"
+                    result.notes = notes
+                    return result
         result.stage = "mint"
         cfg["plain_path"] = str(plain)
         save_config(cfg)
@@ -371,13 +487,27 @@ def selfcheck() -> dict[str, Any]:
     g = gw_sc()
     p = pw_sc()
     pre, post = _template_dirs()
+    rec_ok = all(
+        _is_recoverable_mint_err(e)
+        for e in (
+            "result=501 no_connectStr",
+            "CAG result_code=501",
+            "mint failed: no_connectStr from server",
+        )
+    )
+    rec_no = not _is_recoverable_mint_err("Read timed out")
     return {
-        "ok": bool(g.get("ok") and p.get("ok")),
+        "ok": bool(g.get("ok") and p.get("ok") and rec_ok and rec_no),
         "gateway": g,
         "power": p,
         "templates": {"pre": pre, "post": post, "pre_exists": Path(pre).is_dir()},
         "production_claim": PRODUCTION_CLAIM,
-        "defaults": {"plain": DEFAULT_PLAIN},
+        "defaults": {
+            "plain": DEFAULT_PLAIN,
+            "power_wait_s": DEFAULT_POWER_WAIT_S,
+            "mint_power_retry": DEFAULT_MINT_POWER_RETRY,
+        },
+        "mint_recover_detect": {"ok": rec_ok and rec_no},
     }
 
 

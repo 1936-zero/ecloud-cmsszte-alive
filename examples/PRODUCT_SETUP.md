@@ -37,8 +37,27 @@ python3 main.py login
 | 行为 | 参数 |
 |------|------|
 | 已开过则跳过 | 默认（看 `power_on_done`） |
-| 强制再开一次 | `--force-power` |
+| 强制再开一次 | `--force-power`（含 SaaS 已 running 仍 re-operate） |
 | 完全跳过开机 | `--no-power` |
+| 开机后等待 | `--power-wait N`（默认 **15s**，env `CLOUD_PC_POWER_WAIT`） |
+
+### mint 501 / no_connectStr 自动恢复（#75fixw）
+
+SaaS 报 `already_running` 时首次会**跳过** `operate=available`，但 CAG 仍可能签不出 connectStr（`result=501 no_connectStr`）。
+
+**CLI 与 WebUI 共用** `run_product_setup` 恢复链（仅一次）：
+
+1. 首次 mint 失败且错误可恢复（`501` / `no_connectStr`）
+2. **force** `ensure_powered_once`（绕过 `already_running` + `power_on_done`）
+3. 等待 `--power-wait`（默认 15s）
+4. **再 mint 一次**
+
+| 行为 | 参数 |
+|------|------|
+| 启用恢复（默认） | 无（`mint_power_retry=True`） |
+| 关闭恢复 | `--no-mint-power-retry` |
+
+日常 Path B 保活轮次仍**不再开机**（`power_on_done` 门闩不变）。
 
 ## 离线自检
 

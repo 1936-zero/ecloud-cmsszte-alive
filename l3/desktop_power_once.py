@@ -103,7 +103,9 @@ def ensure_powered_once(
     """Power on desktop if not yet marked done in cfg.
 
     - force=False (default): if cfg[power_on_done] truthy → skip entirely.
-    - If status already running → mark done, do not operate.
+    - force=False + status already running → mark done, do not operate.
+    - force=True: ignore power_on_done and already_running; re-call operate=available
+      (#75fixw: SaaS running ≠ CAG mint-ready; mint 501 recovery needs this).
     - Else call operate=available once, set power_on_done=True, save cfg.
 
     ``http`` is EcloudHttpUtil-like; desktop is optional Desktop dataclass.
@@ -159,7 +161,9 @@ def ensure_powered_once(
             notes.append(f"status_query_failed:{type(e).__name__}")
             log.warning("power_once status query failed: %s", e)
 
-    if status_before and _status_is_running(status_before):
+    # force=True：即便 SaaS 报 running 也再调 operate=available
+    # （#75fixw：SaaS running ≠ CAG 可 mint；mint 501 恢复路径依赖此行为）
+    if (not force) and status_before and _status_is_running(status_before):
         cfg[KEY_POWER_ON_DONE] = True
         cfg[KEY_POWER_ON_AT] = time.strftime("%Y-%m-%dT%H:%M:%S")
         cfg[KEY_POWER_ON_MACHINE] = mid
@@ -175,6 +179,8 @@ def ensure_powered_once(
             instance_id=iid,
             notes=notes,
         )
+    if force and status_before and _status_is_running(status_before):
+        notes.append("force=True: ignore already_running, re-operate available")
 
     if not mid:
         return PowerOnceResult(
@@ -281,7 +287,69 @@ def selfcheck() -> dict[str, Any]:
     )
     assert not r2.acted and r2.skipped_reason == "power_on_done"
     assert len(calls) == 1
-    return {"ok": True, "calls": len(calls), "r1": r1.as_public_dict(), "r2": r2.as_public_dict()}
+
+    # #75fixw: force=True ignores power_on_done
+    r3 = ensure_powered_once(
+        FakeHttp(),
+        cfg,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=True,
+        poll_status=False,
+        operate_fn=fake_operate,
+        wait_s=0,
+    )
+    assert r3.acted and len(calls) == 2
+
+    # force=True also ignores already_running status
+    def fake_status(_http, _ds):
+        return {"i1": "running"}
+
+    calls.clear()
+    cfg_run: dict = {}
+    r4 = ensure_powered_once(
+        FakeHttp(),
+        cfg_run,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=True,
+        poll_status=True,
+        status_fn=fake_status,
+        operate_fn=fake_operate,
+        wait_s=0,
+    )
+    assert r4.acted and len(calls) == 1
+    assert any("ignore already_running" in n for n in (r4.notes or []))
+
+    # without force, already_running skips
+    calls.clear()
+    cfg_skip: dict = {}
+    r5 = ensure_powered_once(
+        FakeHttp(),
+        cfg_skip,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=False,
+        poll_status=True,
+        status_fn=fake_status,
+        operate_fn=fake_operate,
+        wait_s=0,
+    )
+    assert not r5.acted and r5.skipped_reason == "already_running"
+    assert len(calls) == 0
+
+    return {
+        "ok": True,
+        "calls_after_force": 2,
+        "r1": r1.as_public_dict(),
+        "r2": r2.as_public_dict(),
+        "force_power_on_done": r3.as_public_dict(),
+        "force_already_running": r4.as_public_dict(),
+        "skip_already_running": r5.as_public_dict(),
+    }
 
 
 if __name__ == "__main__":

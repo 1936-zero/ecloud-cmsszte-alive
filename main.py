@@ -372,6 +372,11 @@ def cmd_setup(args):
     client = build_client(cfg)
     plain = getattr(args, "plain", None) or cfg.get("plain_path") or DEFAULT_PLAIN
     # argparse dest for --host/--cag-host is cag_host
+    from l3.product_setup import DEFAULT_POWER_WAIT_S
+
+    # --power-wait None → product default (15s / CLOUD_PC_POWER_WAIT)
+    _pw = getattr(args, "power_wait", None)
+    power_wait_s = float(DEFAULT_POWER_WAIT_S if _pw is None else _pw)
     result = run_product_setup(
         cfg=cfg,
         client=client,
@@ -389,7 +394,8 @@ def cmd_setup(args):
         instance_id=str(getattr(args, "instance_id", None) or ""),
         machine_id=str(getattr(args, "machine_id", None) or ""),
         mint_timeout=float(getattr(args, "mint_timeout", 25.0) or 25.0),
-        power_wait_s=float(getattr(args, "power_wait", 0.0) or 0.0),
+        power_wait_s=power_wait_s,
+        mint_power_retry=not bool(getattr(args, "no_mint_power_retry", False)),
         dry_run=bool(getattr(args, "dry_run", False)),
     )
     public = result.as_public_dict()
@@ -1261,6 +1267,11 @@ def main():
     su.add_argument("--no-power", action="store_true", help="skip ensure_powered_once")
     su.add_argument("--force-power", action="store_true", help="ignore power_on_done flag and re-call operate")
     su.add_argument("--no-mint", action="store_true", help="skip connectStr mint")
+    su.add_argument(
+        "--no-mint-power-retry",
+        action="store_true",
+        help="disable mint 501/no_connectStr → force power + remint once (default: enabled)",
+    )
     su.add_argument("--with-path-b", action="store_true", help="run path_B 1-round after mint")
     su.add_argument("--path-b-rounds", type=int, default=1, help="path_B rounds when --with-path-b (default 1)")
     su.add_argument("--heart-listen", type=float, default=30.0, help="path_B HEART window s (default 30)")
@@ -1271,7 +1282,12 @@ def main():
     su.add_argument("--instance-id", help="desktop instance ID; omit to auto-select")
     su.add_argument("--machine-id", help="desktop machine ID; omit to auto-select")
     su.add_argument("--mint-timeout", type=float, default=25.0, help="mint timeout seconds")
-    su.add_argument("--power-wait", type=float, default=0.0, help="seconds to wait after operate=available")
+    su.add_argument(
+        "--power-wait",
+        type=float,
+        default=None,
+        help="seconds to wait after operate=available (default 15; env CLOUD_PC_POWER_WAIT)",
+    )
 
     # Web UI
     wp = sub.add_parser("web", help="start Web UI (Flask)")
