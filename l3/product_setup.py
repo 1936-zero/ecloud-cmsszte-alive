@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -135,8 +136,9 @@ def run_product_setup(
     """Run customer-facing setup chain. Never logs plain/token secrets.
 
     #75fixw recovery (CLI + WebUI shared):
-    if first mint fails with CAG 501/no_connectStr and do_power:
-      force ensure_powered_once (bypass already_running) → wait → remint once.
+    if first mint fails with CAG 501/no_connectStr and mint_power_retry:
+      do_power=True  → force ensure_powered_once → wait → remint once
+      do_power=False → wait only → remint once (#75fixae; WebUI already powered)
     #75fixac: power_on_done still skips while running/unknown; clearly stopped
     status re-allows operate=available (WebUI preflight + _ensure_plain share this).
     """
@@ -293,43 +295,65 @@ def run_product_setup(
             if not result.mint["ok"]:
                 mint_err = result.mint["error"] or "mint_failed"
                 # #75fixw: SaaS already_running skip may leave CAG unready → force power once
-                if (
-                    do_power
-                    and mint_power_retry
-                    and _is_recoverable_mint_err(mint_err)
-                ):
+                # #75fixae: do_power=False (WebUI preflight/已开机 remint) 时仍 wait+remint；
+                #           不再被 do_power 门闩关掉恢复路径
+                if mint_power_retry and _is_recoverable_mint_err(mint_err):
                     wait_rec = (
                         float(power_wait_s)
                         if float(power_wait_s or 0) > 0
                         else DEFAULT_POWER_WAIT_S
                     )
-                    notes.append(
-                        f"mint_recover: first mint failed ({mint_err[:120]}); "
-                        f"force operate=available + wait {wait_rec}s + remint once"
-                    )
-                    log.warning(
-                        "mint recoverable fail → force power + wait %.1fs + remint: %s",
-                        wait_rec,
-                        mint_err[:160],
-                    )
-                    from l3.desktop_power_once import ensure_powered_once
-
                     power_initial = dict(result.power or {})
-                    pr2 = ensure_powered_once(
-                        client,
-                        cfg,
-                        desktop=desktop,
-                        force=True,
-                        wait_s=wait_rec,
-                        save_cfg_fn=save_config,
-                    )
-                    result.power = {
-                        "initial": power_initial,
-                        "retry": pr2.as_public_dict(),
-                    }
-                    notes.extend(
-                        [f"mint_recover_power:{n}" for n in (pr2.notes or [])]
-                    )
+                    if do_power:
+                        notes.append(
+                            f"mint_recover: first mint failed ({mint_err[:120]}); "
+                            f"force operate=available + wait {wait_rec}s + remint once"
+                        )
+                        log.warning(
+                            "mint recoverable fail → force power + wait %.1fs + remint: %s",
+                            wait_rec,
+                            mint_err[:160],
+                        )
+                        from l3.desktop_power_once import ensure_powered_once
+
+                        pr2 = ensure_powered_once(
+                            client,
+                            cfg,
+                            desktop=desktop,
+                            force=True,
+                            wait_s=wait_rec,
+                            save_cfg_fn=save_config,
+                        )
+                        result.power = {
+                            "initial": power_initial,
+                            "retry": pr2.as_public_dict(),
+                        }
+                        notes.extend(
+                            [f"mint_recover_power:{n}" for n in (pr2.notes or [])]
+                        )
+                    else:
+                        # already powered (or power skipped): CAG still warming → wait only
+                        notes.append(
+                            f"mint_recover: first mint failed ({mint_err[:120]}); "
+                            f"do_power=false → wait {wait_rec}s + remint once (#75fixae)"
+                        )
+                        log.warning(
+                            "mint recoverable fail (no re-power) → wait %.1fs + remint: %s",
+                            wait_rec,
+                            mint_err[:160],
+                        )
+                        try:
+                            time.sleep(max(0.0, float(wait_rec)))
+                        except Exception:
+                            pass
+                        result.power = {
+                            "initial": power_initial,
+                            "retry": {
+                                "acted": False,
+                                "skipped_reason": "mint_recover_wait_only",
+                                "wait_s": wait_rec,
+                            },
+                        }
                     mr2 = mint_connectstr(
                         req, plain_path=plain, write_plain=True, dry_run=False
                     )
@@ -342,13 +366,17 @@ def run_product_setup(
                         "cag": f"{gw.cag_host}:{gw.cag_port}",
                         "recovered": True,
                         "first_error": mint_err,
+                        "recover_mode": "force_power" if do_power else "wait_only",
                     }
                     if not result.mint["ok"]:
                         result.error = result.mint["error"] or mint_err
                         result.stage = "mint"
                         result.notes = notes
                         return result
-                    notes.append("mint_recover: remint OK after force power")
+                    notes.append(
+                        "mint_recover: remint OK after "
+                        + ("force power" if do_power else "wait_only")
+                    )
                 else:
                     result.error = mint_err
                     result.stage = "mint"

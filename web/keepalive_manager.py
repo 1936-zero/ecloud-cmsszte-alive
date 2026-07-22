@@ -631,6 +631,35 @@ class KeepaliveManager:
             )
         return cfg
 
+    @staticmethod
+    def _plain_stale_after_power(plain: Path, cfg: dict) -> bool:
+        """#75fixae: plain mtime older than power_on_at → must remint after boot.
+
+        Preflight may power the desktop then start Path B with an existing plain.
+        ensure_powered_once then returns already_running / power_on_done and the
+        old path skipped mint — connectStr from the previous power cycle is dead.
+        """
+        try:
+            if not plain.is_file() or plain.stat().st_size <= 0:
+                return True
+        except OSError:
+            return True
+        poa = str((cfg or {}).get("power_on_at") or "").strip()
+        if not poa:
+            # no marker → not "stale after power"; first-mint path handles missing plain
+            return False
+        try:
+            # power_on_at written as "%Y-%m-%dT%H:%M:%S" (local, no tz)
+            poa_ts = time.mktime(time.strptime(poa[:19], "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return False
+        try:
+            plain_mtime = float(plain.stat().st_mtime)
+        except OSError:
+            return True
+        # 2s skew tolerance (fs vs wall clock)
+        return plain_mtime < (poa_ts - 2.0)
+
     def _ensure_plain(
         self,
         http: EcloudHttpUtil,
@@ -659,12 +688,14 @@ class KeepaliveManager:
             cfg = self._load_cfg_local() or cfg
 
         # #75fixac: plain 存在时也要检查是否关机；关机则 operate=available + remint
+        # #75fixae: preflight/本处已开机但 plain 早于 power_on_at → 强制 remint
+        #           （旧 connectStr 在电源周期后失效；already_running 不得跳过 mint）
         need_remint_after_power = False
+        power_wait = float(os.environ.get("CLOUD_PC_POWER_WAIT", "60") or 60)
         if plain_ok:
             try:
                 from l3.desktop_power_once import ensure_powered_once
 
-                power_wait = float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15)
                 pr = ensure_powered_once(
                     http,
                     cfg,
@@ -682,6 +713,19 @@ class KeepaliveManager:
                         "INFO",
                         "检测到桌面已关机，已调用开机(operate=available)，将重签发凭证…",
                     )
+                elif self._plain_stale_after_power(plain, cfg):
+                    # already_running / power_on_done，但凭证早于最近开机
+                    need_remint_after_power = True
+                    self._log(
+                        "INFO",
+                        "会话凭证早于最近开机(power_on_at)，等待 CAG 就绪后重签发… "
+                        f"power_skip={pr.skipped_reason or '-'} wait={power_wait:.0f}s",
+                    )
+                    # ensure_powered_once 未 wait（未 operate）；冷启动 CAG 需缓冲
+                    try:
+                        time.sleep(max(0.0, float(power_wait)))
+                    except Exception:
+                        pass
                 else:
                     host = self._resolve_cag_host(cfg)
                     self._log(
@@ -705,7 +749,7 @@ class KeepaliveManager:
         if not plain_ok:
             self._log("INFO", "未找到会话凭证文件，正在准备（开机 + 签发）…")
         elif need_remint_after_power:
-            self._log("INFO", "关机后已开机，正在重签发会话凭证…")
+            self._log("INFO", "电源周期后凭证失效，正在重签发会话凭证…")
         try:
             plain.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -727,6 +771,7 @@ class KeepaliveManager:
             # #75fixw: mint 501/no_connectStr → force power + wait + remint
             # （默认 mint_power_retry=True / power_wait=DEFAULT_POWER_WAIT_S，与 CLI 共用）
             # #75fixac: remint after power-on when plain already existed
+            # #75fixae: power_wait 默认 60；do_power=False 时 mint501 仍可 wait+remint
             result = run_product_setup(
                 cfg=cfg,
                 client=http,
@@ -739,7 +784,7 @@ class KeepaliveManager:
                 instance_id=instance_id or str(cfg.get("instance_id") or ""),
                 machine_id=machine_id or str(cfg.get("machine_id") or ""),
                 mint_timeout=float(os.environ.get("CLOUD_PC_MINT_TIMEOUT", "90") or 90),
-                power_wait_s=float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15),
+                power_wait_s=float(os.environ.get("CLOUD_PC_POWER_WAIT", "60") or 60),
                 mint_power_retry=True,
             )
         except Exception as e:
