@@ -15,6 +15,9 @@
     /* shared #log-full-modal: "global" | "card" | null — softPoll 不得用卡日志盖运行日志 */
     logModalSource: null,
     logModalAccountId: null,
+    /* #75fixao: stick-to-bottom gates — only auto-scroll when near bottom */
+    globalStickBottom: true,
+    logFullStickBottom: true,
     pollTimer: null,
     tokenRequired: false,
     setupRequired: false,
@@ -165,6 +168,8 @@
     state.currentId = id;
     state.logModalSource = "card";
     state.logModalAccountId = id;
+    /* #75fixao: open card full log re-attaches stick */
+    state.logFullStickBottom = true;
     var fullBody = $("log-full-body");
     var modal = $("log-full-modal");
     var title = $("log-full-title");
@@ -703,6 +708,26 @@
     return !modal.hidden && !modal.classList.contains("hidden");
   }
 
+  /* #75fixao: near-bottom threshold (px) — user scroll up detaches stick */
+  var LOG_STICK_THRESHOLD_PX = 48;
+
+  function isNearBottom(el) {
+    if (!el) return true;
+    try {
+      var gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+      return gap <= LOG_STICK_THRESHOLD_PX;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function scrollLogIfStuck(el, stickFlag) {
+    if (!el || !stickFlag) return;
+    try {
+      el.scrollTop = el.scrollHeight;
+    } catch (e) {}
+  }
+
   function syncGlobalLogModalBody() {
     /* only when modal is showing bottom 运行日志 (not card ring) */
     if (state.logModalSource !== "global") return;
@@ -711,9 +736,8 @@
     var body = $("log-full-body");
     if (!src || !body) return;
     body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
-    try {
-      body.scrollTop = body.scrollHeight;
-    } catch (e) {}
+    /* respect user scroll position when detached */
+    scrollLogIfStuck(body, state.logFullStickBottom);
   }
 
   function renderLogFullBody(id) {
@@ -729,9 +753,7 @@
     fullBody.innerHTML = entries.length
       ? entries.map(formatLogLineHtml).join("")
       : '<div class="log-line">暂无日志</div>';
-    try {
-      fullBody.scrollTop = fullBody.scrollHeight;
-    } catch (e) {}
+    scrollLogIfStuck(fullBody, state.logFullStickBottom);
   }
 
   function applyLogsToDom(id, force) {
@@ -1249,8 +1271,10 @@
       });
       // cap DOM
       while (box.children.length > 300) box.removeChild(box.firstChild);
-      box.scrollTop = box.scrollHeight;
-      /* #75fixaa: 运行日志弹窗打开时跟随底部 viewport，不被卡日志污染 */
+      /* #75fixao: only stick when user is near bottom; force refresh re-attaches */
+      if (force) state.globalStickBottom = true;
+      scrollLogIfStuck(box, state.globalStickBottom);
+      /* #75fixaa: 运行日志弹窗打开时跟随，但尊重 stick 闸 */
       syncGlobalLogModalBody();
     }).catch(function () { /* ignore poll errors */ });
   }
@@ -1293,6 +1317,7 @@
     if (!src || !body || !modal) return;
     state.logModalSource = "global";
     state.logModalAccountId = null;
+    state.logFullStickBottom = true;
     var title = $("log-full-title");
     if (title) title.textContent = "运行日志";
     body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
@@ -1307,13 +1332,14 @@
     modal.style.pointerEvents = "auto";
     modal.style.zIndex = "1200";
     document.body.classList.add("modal-open", "log-modal-open");
-    try { body.scrollTop = body.scrollHeight; } catch (e) {}
+    scrollLogIfStuck(body, true);
   }
   function closeLogFull() {
     var modal = $("log-full-modal");
     if (!modal) return;
     state.logModalSource = null;
     state.logModalAccountId = null;
+    state.logFullStickBottom = true;
     modal.classList.add("hidden");
     modal.classList.remove("open", "is-open");
     modal.setAttribute("hidden", "");
@@ -1332,6 +1358,10 @@
         ev.preventDefault();
         openLogFull();
       });
+      /* #75fixao: user scroll detaches / re-attaches bottom stick for 底栏 */
+      g.addEventListener("scroll", function () {
+        state.globalStickBottom = isNearBottom(g);
+      }, { passive: true });
     }
     // 完整日志按钮已删；对齐爱家：双击运行日志打开二级页
     var closeBtn = $("log-full-close");
@@ -1341,6 +1371,12 @@
       modal.addEventListener("click", function (ev) {
         if (ev.target === modal) closeLogFull();
       });
+    }
+    var fullBody = $("log-full-body");
+    if (fullBody) {
+      fullBody.addEventListener("scroll", function () {
+        state.logFullStickBottom = isNearBottom(fullBody);
+      }, { passive: true });
     }
     document.addEventListener("keydown", function (ev) {
       if (ev.key === "Escape") {

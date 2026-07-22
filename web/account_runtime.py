@@ -336,7 +336,15 @@ class AccountRuntime:
         except Exception as e:
             log.warning("append log %s failed: %s", self.logs_path, e)
 
-    def log(self, level: str, msg: str, *, to_global: bool = True) -> dict:
+    def log(self, level: str, msg: str, *, to_global: bool = False) -> dict:
+        """Card ring always; bottom 运行日志 is opt-in (#75fixao).
+
+        Default to_global=False — account keepalive/preflight/login noise stays
+        on the card. ERROR is auto-promoted so hard failures still surface in
+        the bottom bar without each call site remembering.
+        Explicit to_global=True is for WebUI lifecycle: create/delete card,
+        user start/stop keepalive, rate-limit / gate notices.
+        """
         with self._lock:
             self._log_seq += 1
             entry = {
@@ -349,7 +357,9 @@ class AccountRuntime:
             }
             self._logs.append(entry)
             self._append_log_file(entry)
-        if to_global:
+        lvl_u = str(level or "").upper()
+        promote = bool(to_global) or lvl_u in ("ERROR",)
+        if promote:
             self.registry.append_global_log(entry)
         return entry
 
@@ -388,29 +398,27 @@ class AccountRuntime:
         return False
 
     def _install_km_log_bridge(self) -> None:
-        """Mirror KeepaliveManager into account logs; global = lifecycle/errors only."""
+        """Mirror KeepaliveManager into account logs; global = WARN/ERROR only (#75fixao)."""
         orig = self.km._log
 
         def _bridged(level: str, msg: str, _orig=orig):
             _orig(level, msg)
-            # 卡片 ring 始终全量；底部运行日志对齐爱家，不刷每轮 heart
+            # 卡片 ring 始终全量；底栏 WebUI-lifecycle-only，KM 流水不进 global
             lvl = str(level or "").upper()
-            tick = self._is_keepalive_round_tick(msg)
-            to_g = (not tick) or lvl in ("WARN", "WARNING", "ERROR")
+            to_g = lvl in ("WARN", "WARNING", "ERROR")
             self.log(level, msg, to_global=to_g)
 
         self.km._log = _bridged  # type: ignore[method-assign]
 
     def _install_aka_log_bridge(self) -> None:
-        """Mirror AccountKeepaliveManager; global = lifecycle/errors only."""
+        """Mirror AccountKeepaliveManager; global = WARN/ERROR only (#75fixao)."""
         orig = self.aka._log
 
         def _bridged(level: str, msg: str, _orig=orig):
             _orig(level, msg)
             full = f"[账号保活] {msg}"
             lvl = str(level or "").upper()
-            tick = self._is_keepalive_round_tick(msg)
-            to_g = (not tick) or lvl in ("WARN", "WARNING", "ERROR")
+            to_g = lvl in ("WARN", "WARNING", "ERROR")
             self.log(level, full, to_global=to_g)
 
         self.aka._log = _bridged  # type: ignore[method-assign]
@@ -561,7 +569,8 @@ class AccountRuntime:
 
         quiet=True：成功路径的「登录中/结果/成功」只写卡内 ring，不上 global
         （Path B / 账号保活 relogin 每轮静默刷新 token 时使用，避免淹没保活行）。
-        失败/需短信仍始终上 global，便于用户感知。
+        #75fixao: 底栏 WebUI-lifecycle-only — 交互登录成功也不再进 global；
+        失败/锁定/ERROR 仍上 global，便于用户感知。
 
         #75fixam-fix: 10 分钟内同一用户名 WebUI 交互重登 ≤3 次，否则 locked。
         quiet=True（Path B / AKA 静默刷 token）不计次；CLI 手动 login 也不走此限流。
@@ -602,20 +611,20 @@ class AccountRuntime:
                 self._cfg["updated_at"] = _now_iso()
                 self._save_cfg()
 
-            # quiet 成功：卡内 only；失败/非 success：仍 to_global 便于排查
-            self.log("INFO", f"登录中: user={username}", to_global=not quiet)
+            # #75fixao: 登录流水默认卡内；仅失败/锁定上 global（底栏 WebUI 生命周期）
+            self.log("INFO", f"登录中: user={username}", to_global=False)
             result = login.login_with_password(http, username, password)
             _ok = result.get("status") == login.LoginResult.SUCCESS
             self.log(
                 "INFO",
                 f"登录结果: {json.dumps(_safe_log_obj({'status': result.get('status'), 'error': result.get('error'), 'error_code': result.get('error_code')}), ensure_ascii=False)}",
-                to_global=(not quiet) or (not _ok),
+                to_global=(not _ok),
             )
 
             if result["status"] == login.LoginResult.SUCCESS:
                 token = result["access_token"]
                 self.set_token(token)
-                self.log("INFO", "登录成功", to_global=not quiet)
+                self.log("INFO", "登录成功", to_global=False)
                 aka = self._autostart_account_keepalive_after_login()
                 # #75fixaj: expose full access_token for relogin_fn consumers
                 # (UI still only sees truncated "token" field)
@@ -1142,10 +1151,12 @@ class AccountRuntime:
         if not ok:
             return {"ok": False, "error": "该账号保活已在运行"}
         label = "Path B" if mode == "path_b" else "HTTP"
+        # #75fixao: user-facing start summary → bottom 运行日志
         self.log(
             "INFO",
             f"已启动 {label} 保活 interval={interval}s instance={instance_id[:20]} "
             f"mode={mode} origin={origin_u or '?'}",
+            to_global=True,
         )
         # Align CLI: starting desktop keepalive also starts account login-state keepalive
         aka_res = self.start_account_keepalive()
@@ -1153,11 +1164,11 @@ class AccountRuntime:
             # already running is fine; other errors only warn
             err = str(aka_res.get("error") or "")
             if "已在运行" not in err and "already" not in err.lower():
-                self.log("WARN", f"桌面保活已启，账号保活未自动启动: {err or aka_res}")
+                self.log("WARN", f"桌面保活已启，账号保活未自动启动: {err or aka_res}", to_global=True)
             else:
-                self.log("INFO", "账号登录态保活已在运行")
+                self.log("INFO", "账号登录态保活已在运行", to_global=True)
         else:
-            self.log("INFO", "已自动启动账号登录态保活（对齐 CLI）")
+            self.log("INFO", "已自动启动账号登录态保活（对齐 CLI）", to_global=True)
         return {
             "ok": True,
             "instance_id": instance_id,
@@ -1172,10 +1183,19 @@ class AccountRuntime:
         with self._lock:
             self._ka_starting = False
         ok = self.km.stop()
-        self.log("INFO", "已请求停止 Path B 保活" if ok else "保活未在运行")
+        # #75fixao: user stop summary → bottom 运行日志
+        self.log(
+            "INFO",
+            "已请求停止 Path B 保活" if ok else "保活未在运行",
+            to_global=True,
+        )
         # Align CLI: stop desktop keepalive also stops account login-state keepalive
         aka_ok = self.stop_account_keepalive()
-        self.log("INFO", f"已同步停止账号登录态保活 ok={aka_ok.get('ok') if isinstance(aka_ok, dict) else aka_ok}")
+        self.log(
+            "INFO",
+            f"已同步停止账号登录态保活 ok={aka_ok.get('ok') if isinstance(aka_ok, dict) else aka_ok}",
+            to_global=True,
+        )
         return {"ok": True if ok is not None else True, "stopped": bool(ok), "account_keepalive_stopped": aka_ok}
 
     def _autostart_account_keepalive_after_login(self) -> dict | None:
@@ -1235,12 +1255,17 @@ class AccountRuntime:
             self._cfg["account_keepalive_interval"] = interval
             self._cfg["updated_at"] = _now_iso()
             self._save_cfg()
-        self.log("INFO", f"已启动账号登录态保活 interval={interval}s")
+        # user/lifecycle summary (also called from start_keepalive path)
+        self.log("INFO", f"已启动账号登录态保活 interval={interval}s", to_global=True)
         return {"ok": True, "interval": interval}
 
     def stop_account_keepalive(self) -> dict:
         ok = self.aka.stop()
-        self.log("INFO", "已请求停止账号登录态保活" if ok else "账号保活未在运行")
+        self.log(
+            "INFO",
+            "已请求停止账号登录态保活" if ok else "账号保活未在运行",
+            to_global=True,
+        )
         return {"ok": ok}
 
     def logout(self) -> dict:
@@ -1408,7 +1433,8 @@ class AccountRegistry:
             self._write_index()
         # Pure card create; login is explicit via /api/accounts/<id>/login
         # (matches composer: create → login → desktops → keepalive).
-        acc.log("INFO", f"账号卡片已创建 label={label}")
+        # #75fixao: create card is WebUI lifecycle → bottom 运行日志
+        acc.log("INFO", f"账号卡片已创建 label={label}", to_global=True)
         return {"account": acc.public_meta()}
 
     def delete(self, account_id: str) -> dict:
