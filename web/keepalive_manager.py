@@ -267,15 +267,24 @@ class AccountKeepaliveManager:
         return True
 
     def stop(self) -> bool:
-        if not self._running:
-            return False
+        # #75fixag: non-blocking stop — UI must not wait join
+        with self._lock:
+            if not self._running and not (self._thread and self._thread.is_alive()):
+                return False
+            was = self._running
+            self._running = False
         self._stop_event.set()
         self._log("INFO", "正在停止账号保活...")
-        if self._thread:
-            self._thread.join(timeout=10)
-        with self._lock:
-            self._running = False
-        self._log("INFO", "账号保活已停止")
+        th = self._thread
+
+        def _join_bg(t: threading.Thread | None) -> None:
+            if t and t.is_alive():
+                t.join(timeout=3.0)
+            self._log("INFO", "账号保活已停止" if not (t and t.is_alive()) else "账号保活已标记停止（线程收尾中）")
+
+        threading.Thread(
+            target=_join_bg, args=(th,), daemon=True, name="account-keepalive-stop"
+        ).start()
         return True
 
     def _run(self, http: EcloudHttpUtil, interval: int, relogin_fn):
@@ -479,6 +488,15 @@ class KeepaliveManager:
 
         ticket 参数保留兼容 WebUI/API 旧签名，Path B 不使用 ticket 明文。
         """
+        # #75fixag: previous soft-stop may still have a dying worker
+        old = self._thread
+        if old is not None and old.is_alive():
+            self._stop_event.set()
+            old.join(timeout=5.0)
+            if old.is_alive():
+                self._log("WARN", "上一轮 Path B 线程尚未退出，拒绝重复启动")
+                return False
+
         with self._lock:
             if self._running:
                 return False
@@ -508,18 +526,38 @@ class KeepaliveManager:
         return True
 
     def stop(self) -> bool:
-        """停止保活线程。未运行则返回 False。"""
-        if not self._running:
-            return False
+        """停止保活线程。未运行则返回 False。
+
+        #75fixag: 不在请求线程里 join 长达 heart_listen+30s，否则 Flask 单 worker
+        会卡死 stop API / 前端像「点了没反应」。先置 stop + 立即 running=False，
+        后台短 join；若轮询中线程仍在收尾，start() 会再拦一层。
+        """
+        with self._lock:
+            if not self._running and not (self._thread and self._thread.is_alive()):
+                return False
+            was = self._running
+            self._running = False
         self._stop_event.set()
         self._log("INFO", "正在停止 Path B 保活...")
-        # allow in-flight heart listen + remint slack
-        join_timeout = max(60.0, float(self._heart_listen) + 30.0)
-        if self._thread:
-            self._thread.join(timeout=join_timeout)
-        with self._lock:
-            self._running = False
-        self._log("INFO", "Path B 保活已停止")
+        th = self._thread
+
+        def _join_bg(t: threading.Thread | None) -> None:
+            if not t or not t.is_alive():
+                self._log("INFO", "Path B 保活已停止")
+                return
+            # 给当前 sleep(1) 循环一点时间退出；heart 中可能仍卡一会
+            t.join(timeout=3.0)
+            if t.is_alive():
+                self._log(
+                    "WARN",
+                    "Path B 线程仍在收尾（可能在 heart_listen），已标记停止，稍后自然退出",
+                )
+            else:
+                self._log("INFO", "Path B 保活已停止")
+
+        threading.Thread(
+            target=_join_bg, args=(th,), daemon=True, name="keepalive-pathb-stop"
+        ).start()
         return True
 
     # ------------------------------------------------------------------ path B helpers

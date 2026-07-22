@@ -1060,12 +1060,15 @@ class AccountRuntime:
         return {"ok": True, "instance_id": instance_id, "interval": interval, "account_keepalive": aka_res}
 
     def stop_keepalive(self) -> dict:
+        # #75fixag: always clear start reentrancy latch on stop
+        with self._lock:
+            self._ka_starting = False
         ok = self.km.stop()
         self.log("INFO", "已请求停止 Path B 保活" if ok else "保活未在运行")
         # Align CLI: stop desktop keepalive also stops account login-state keepalive
         aka_ok = self.stop_account_keepalive()
         self.log("INFO", f"已同步停止账号登录态保活 ok={aka_ok.get('ok') if isinstance(aka_ok, dict) else aka_ok}")
-        return {"ok": ok, "account_keepalive_stopped": aka_ok}
+        return {"ok": True if ok is not None else True, "stopped": bool(ok), "account_keepalive_stopped": aka_ok}
 
     def _autostart_account_keepalive_after_login(self) -> dict | None:
         """Best-effort: start L1 account keepalive right after login/SMS success.

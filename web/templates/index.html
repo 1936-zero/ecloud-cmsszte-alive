@@ -351,6 +351,7 @@
     mobile: "", // login 接口返回的手机号（对齐 CLI result.mobile）
     selectedDesktop: null, // {instance_id, machine_id, name}
     startingIds: {}, // #75fixaf: id -> true while start in-flight (prevent double-click)
+    stoppingIds: {}, // #75fixag: id -> true while stop in-flight
     globalSince: 0,
     /* shared #log-full-modal: "global" | "card" | null — softPoll 不得用卡日志盖运行日志 */
     logModalSource: null,
@@ -854,10 +855,13 @@
         logHtml = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
       }
       /* 对齐爱家 cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
-      /* #75fixaf: starting → 禁点「启动中…」，防双击二次开机 */
+      /* #75fixaf: starting → 禁点「启动中…」；#75fixag: stopping → 「停止中…」 */
       var starting = !!(state.startingIds && state.startingIds[acc.id]);
+      var stopping = !!(state.stoppingIds && state.stoppingIds[acc.id]);
       var startStopBtn = running
-        ? '<button type="button" class="btn btn-stop" data-act="stop">停止保活</button>'
+        ? (stopping
+          ? '<button type="button" class="btn btn-stop" data-act="stop" disabled>停止中…</button>'
+          : '<button type="button" class="btn btn-stop" data-act="stop">停止保活</button>')
         : (starting
           ? '<button type="button" class="btn btn-start btn-primary" data-act="start" disabled>启动中…</button>'
           : '<button type="button" class="btn btn-start btn-primary" data-act="start">启动保活</button>');
@@ -1416,13 +1420,20 @@
       return;
     }
     if (act === "stop") {
+      /* #75fixag: FE 停止中禁点；BE 已非阻塞 stop，API 应立刻返回 */
+      if (state.stoppingIds[id]) return;
+      state.stoppingIds[id] = true;
+      loadAccounts();
       api("POST", "/api/accounts/" + encodeURIComponent(id) + "/keepalive/stop")
         .then(function (res) {
           if (res && res.ok === false) showCErr(res.error || "停止失败");
           else showCOk("已停止桌面保活（账号保活已同步停止）");
-          loadAccounts();
         })
-        .catch(function (e) { showCErr(e.message); });
+        .catch(function (e) { showCErr(e.message); })
+        .then(function () {
+          delete state.stoppingIds[id];
+          loadAccounts();
+        });
       return;
     }
     if (act === "logs") {
