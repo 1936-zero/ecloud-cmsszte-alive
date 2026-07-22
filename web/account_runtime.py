@@ -786,6 +786,32 @@ class AccountRuntime:
         if interval < 30:
             interval = 30
 
+        # #75fixaf: reentrancy lock — power/preflight runs BEFORE km.start;
+        # concurrent clicks used to double-power (already_powering).
+        with self._lock:
+            if getattr(self, "_ka_starting", False) or self.km.is_running():
+                return {
+                    "ok": False,
+                    "error": "该账号保活正在启动或已在运行",
+                }
+            self._ka_starting = True
+
+        try:
+            return self._start_keepalive_body(
+                instance_id=instance_id,
+                machine_id=machine_id,
+                interval=interval,
+            )
+        finally:
+            with self._lock:
+                self._ka_starting = False
+
+    def _start_keepalive_body(
+        self,
+        instance_id: str = "",
+        machine_id: str = "",
+        interval: int = 300,
+    ) -> dict:
         http = self.get_http()
 
         def _relogin():

@@ -350,6 +350,7 @@
     loginType: "device_trust",
     mobile: "", // login 接口返回的手机号（对齐 CLI result.mobile）
     selectedDesktop: null, // {instance_id, machine_id, name}
+    startingIds: {}, // #75fixaf: id -> true while start in-flight (prevent double-click)
     globalSince: 0,
     /* shared #log-full-modal: "global" | "card" | null — softPoll 不得用卡日志盖运行日志 */
     logModalSource: null,
@@ -853,9 +854,13 @@
         logHtml = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
       }
       /* 对齐爱家 cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
+      /* #75fixaf: starting → 禁点「启动中…」，防双击二次开机 */
+      var starting = !!(state.startingIds && state.startingIds[acc.id]);
       var startStopBtn = running
         ? '<button type="button" class="btn btn-stop" data-act="stop">停止保活</button>'
-        : '<button type="button" class="btn btn-start btn-primary" data-act="start">启动保活</button>';
+        : (starting
+          ? '<button type="button" class="btn btn-start btn-primary" data-act="start" disabled>启动中…</button>'
+          : '<button type="button" class="btn btn-start btn-primary" data-act="start">启动保活</button>');
       var article = document.createElement("article");
       article.className = "card status-" + st + (state.configPid === acc.id ? " is-configuring" : "");
       article.setAttribute("data-id", acc.id);
@@ -1343,11 +1348,16 @@
     if (!state.currentId) { showCErr("请先登录"); return; }
     var d = state.selectedDesktop;
     if (!d || !d.instance_id) { showCErr("请选择云电脑"); return; }
+    var id = state.currentId;
+    /* #75fixaf: share startingIds with card so softPoll shows 启动中… */
+    if (state.startingIds[id]) return;
     var interval = parseInt($("c-interval").value, 10) || 300;
     var btn = $("c-start");
+    state.startingIds[id] = true;
     btn.disabled = true;
-    btn.textContent = "启动中...";
-    api("POST", "/api/accounts/" + encodeURIComponent(state.currentId) + "/keepalive/start", {
+    btn.textContent = "启动中…";
+    loadAccounts();
+    api("POST", "/api/accounts/" + encodeURIComponent(id) + "/keepalive/start", {
       instance_id: d.instance_id,
       machine_id: d.machine_id || "",
       interval: interval
@@ -1362,14 +1372,18 @@
     }).catch(function (e) {
       showCErr(e.message);
     }).finally(function () {
+      delete state.startingIds[id];
       btn.disabled = false;
       btn.textContent = "启动保活";
+      loadAccounts();
     });
   }
 
   function onCardAction(id, act, card) {
     state.currentId = id;
     if (act === "start") {
+      /* #75fixaf: FE in-flight guard — softPoll re-render also honors startingIds */
+      if (state.startingIds[id]) return;
       var acc = state.accounts.find(function (a) { return a.id === id; });
       var body = {
         instance_id: (acc && acc.instance_id) || "",
@@ -1381,6 +1395,12 @@
         openConfigModal(id);
         return;
       }
+      state.startingIds[id] = true;
+      var startBtn = card && card.querySelector('[data-act="start"]');
+      if (startBtn) {
+        startBtn.disabled = true;
+        startBtn.textContent = "启动中…";
+      }
       api("POST", "/api/accounts/" + encodeURIComponent(id) + "/keepalive/start", body)
         .then(function (res) {
           if (res.ok === false) showCErr(res.error || "启动失败");
@@ -1388,7 +1408,11 @@
           loadAccounts();
           refreshAccountLogs(id);
         })
-        .catch(function (e) { showCErr(e.message); });
+        .catch(function (e) { showCErr(e.message); })
+        .then(function () {
+          delete state.startingIds[id];
+          loadAccounts();
+        });
       return;
     }
     if (act === "stop") {
