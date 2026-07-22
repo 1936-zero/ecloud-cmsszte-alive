@@ -136,7 +136,8 @@ def run_product_setup(
     #75fixw recovery (CLI + WebUI shared):
     if first mint fails with CAG 501/no_connectStr and do_power:
       force ensure_powered_once (bypass already_running) → wait → remint once.
-    Daily Path B keepalive still never re-powers (power_on_done gate).
+    #75fixac: power_on_done still skips while running/unknown; clearly stopped
+    status re-allows operate=available (WebUI preflight + _ensure_plain share this).
     """
     notes: list[str] = []
     from l3.gateway_config import (

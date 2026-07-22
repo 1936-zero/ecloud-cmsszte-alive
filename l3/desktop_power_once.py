@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Ensure desktop is powered on AT MOST once per cloud_pc session.
+"""Ensure desktop is powered on for Path B / mint (public ecloud).
 
-User requirement (#70): Path B keepalive traffic needs a running VM.
-Call SaaS operate=available **only on first setup**; subsequent keepalive
-rounds MUST NOT re-call power-on.
+User requirement (#70): Path B keepalive needs a running VM.
+- First setup: call SaaS operate=available once, mark power_on_done.
+- Subsequent rounds while still running: MUST NOT re-call power-on.
+- #75fixac: if power_on_done but SaaS status is clearly **stopped/关机**,
+  re-call operate=available so WebUI/CLI「启保活」能自动拉起已关机桌面.
 
 PIN: public_ecloud · production_claim=false · ban jtydn
 """
@@ -100,10 +102,13 @@ def ensure_powered_once(
     status_fn: Optional[Callable[..., dict]] = None,
     save_cfg_fn: Optional[Callable[[dict], None]] = None,
 ) -> PowerOnceResult:
-    """Power on desktop if not yet marked done in cfg.
+    """Power on desktop when needed for Path B / mint.
 
-    - force=False (default): if cfg[power_on_done] truthy → skip entirely.
     - force=False + status already running → mark done, do not operate.
+    - force=False + cfg[power_on_done] + status still running / unknown → skip
+      (keepalive rounds must not spam power API).
+    - force=False + cfg[power_on_done] + status clearly **stopped** → re-operate
+      available (#75fixac: 用户关机后再启保活应自动开机).
     - force=True: ignore power_on_done and already_running; re-call operate=available
       (#75fixw: SaaS running ≠ CAG mint-ready; mint 501 recovery needs this).
     - Else call operate=available once, set power_on_done=True, save cfg.
@@ -125,14 +130,8 @@ def ensure_powered_once(
         mname = mname or str(cfg.get("machine_name") or cfg.get("username") or "desktop")
         iid = iid or str(cfg.get("instance_id") or "")
 
-    if not force and cfg.get(KEY_POWER_ON_DONE):
-        return PowerOnceResult(
-            acted=False,
-            skipped_reason="power_on_done",
-            machine_id=mid,
-            instance_id=iid,
-            notes=["already marked; keepalive must not re-power"],
-        )
+    # #75fixac: do NOT early-return on power_on_done before status poll —
+    # stopped desktops must be allowed to re-power.
 
     status_before = ""
     statuses: dict = {}
@@ -179,9 +178,33 @@ def ensure_powered_once(
             instance_id=iid,
             notes=notes,
         )
+
+    # #75fixac: power_on_done only blocks when NOT clearly stopped
+    if (not force) and cfg.get(KEY_POWER_ON_DONE):
+        if status_before and _status_is_stopped(status_before):
+            notes.append(
+                "power_on_done but status stopped → re-operate available (#75fixac)"
+            )
+            log.info(
+                "power_once: power_on_done ignored (stopped status=%s) machine_id=%s",
+                status_before,
+                mid or "-",
+            )
+            # fall through to operate=available
+        else:
+            return PowerOnceResult(
+                acted=False,
+                skipped_reason="power_on_done",
+                status_before=status_before,
+                status_after=status_before,
+                machine_id=mid,
+                instance_id=iid,
+                notes=notes
+                + ["already marked; keepalive must not re-power while not stopped"],
+            )
+
     if force and status_before and _status_is_running(status_before):
         notes.append("force=True: ignore already_running, re-operate available")
-
     if not mid:
         return PowerOnceResult(
             acted=False,

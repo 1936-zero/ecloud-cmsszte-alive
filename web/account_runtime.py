@@ -188,6 +188,14 @@ class AccountRuntime:
             except Exception:
                 pass
 
+    def _save_cfg_from_dict(self, cfg: dict) -> None:
+        """Persist an external cfg dict (used as save_cfg_fn for ensure_powered_once)."""
+        if not isinstance(cfg, dict):
+            return
+        with self._lock:
+            self._cfg = dict(cfg)
+            self._save_cfg()
+
     def _gateway_needs_refresh(self) -> bool:
         """#75fixy: weak/missing gateway must re-read customLoginParams."""
         src = str(self._cfg.get("gateway_source") or "").strip().lower()
@@ -748,6 +756,7 @@ class AccountRuntime:
 
                 selected = None
                 preflight_errors = []
+                power_attempted_ids: set[str] = set()
                 for d in desktops:
                     st = statuses.get(d.instance_id, "")
                     try:
@@ -755,16 +764,93 @@ class AccountRuntime:
                             lambda d=d: _preflight_uptime(http, d.instance_id)
                         )
                     except EcloudError as e:
-                        label = d.machine_name or d.instance_id[:20] or "未知桌面"
-                        state = f", status={st}" if st else ""
-                        preflight_errors.append(f"{label}{state}: {e.message}")
-                    else:
-                        self.log(
-                            "INFO",
-                            f"preflight ok instance={d.instance_id[:20]} status={st or '?'} uptime={uptime}",
-                        )
-                        selected = d
-                        break
+                        # #75fixac: 关机桌面 preflight 失败 → 尝试开机后重试 uptime
+                        powered = False
+                        if d.instance_id not in power_attempted_ids:
+                            power_attempted_ids.add(d.instance_id)
+                            try:
+                                from l3.desktop_power_once import (
+                                    ensure_powered_once,
+                                    _status_is_stopped,
+                                )
+
+                                st_l = (st or "").strip().lower()
+                                msg_l = (e.message or "").lower()
+                                looks_stopped = (
+                                    (st and _status_is_stopped(st))
+                                    or any(
+                                        h in msg_l
+                                        for h in (
+                                            "关机",
+                                            "shutdown",
+                                            "stopped",
+                                            "stop",
+                                            "不可用",
+                                            "not available",
+                                            "not running",
+                                        )
+                                    )
+                                    or not st  # unknown status: still try power once
+                                )
+                                if looks_stopped:
+                                    self.log(
+                                        "INFO",
+                                        f"preflight 失败且疑似关机，尝试开机 "
+                                        f"instance={d.instance_id[:20]} status={st or '?'}",
+                                    )
+                                    # force=True: preflight 已失败，必须尝试开机
+                                    # （避免 status 空串 + power_on_done 仍跳过）
+                                    pr = ensure_powered_once(
+                                        http,
+                                        self._cfg,
+                                        desktop=d,
+                                        machine_id=d.machine_id,
+                                        machine_name=getattr(d, "machine_name", "") or "",
+                                        instance_id=d.instance_id,
+                                        save_cfg_fn=lambda c: self._save_cfg_from_dict(c),
+                                        wait_s=float(
+                                            os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15
+                                        ),
+                                        force=True,
+                                    )
+                                    self._cfg = self._load_cfg() or self._cfg
+                                    if pr.acted or pr.skipped_reason == "already_running":
+                                        powered = True
+                                        self.log(
+                                            "INFO",
+                                            f"开机结果 acted={pr.acted} skip={pr.skipped_reason or '-'} "
+                                            f"status_after={pr.status_after or '-'}",
+                                        )
+                                        uptime = _call_with_relogin(
+                                            lambda d=d: _preflight_uptime(
+                                                http, d.instance_id
+                                            )
+                                        )
+                            except EcloudError as e2:
+                                label = d.machine_name or d.instance_id[:20] or "未知桌面"
+                                state = f", status={st}" if st else ""
+                                preflight_errors.append(
+                                    f"{label}{state}: {e.message}; power/retry: {e2.message}"
+                                )
+                                continue
+                            except Exception as ex:
+                                label = d.machine_name or d.instance_id[:20] or "未知桌面"
+                                state = f", status={st}" if st else ""
+                                preflight_errors.append(
+                                    f"{label}{state}: {e.message}; power_err={type(ex).__name__}"
+                                )
+                                continue
+                        if not powered:
+                            label = d.machine_name or d.instance_id[:20] or "未知桌面"
+                            state = f", status={st}" if st else ""
+                            preflight_errors.append(f"{label}{state}: {e.message}")
+                            continue
+                    self.log(
+                        "INFO",
+                        f"preflight ok instance={d.instance_id[:20]} status={st or '?'} uptime={uptime}",
+                    )
+                    selected = d
+                    break
                 if selected is None:
                     detail = preflight_errors[0] if preflight_errors else "desktopUptime 未返回运行时长"
                     return {"ok": False, "error": f"没有可保活桌面：{detail}"}
@@ -798,7 +884,51 @@ class AccountRuntime:
                 uptime = _call_with_relogin(lambda: _preflight_uptime(http, instance_id))
                 self.log("INFO", f"preflight ok instance={instance_id[:20]} uptime={uptime}")
             except EcloudError as e:
-                return {"ok": False, "error": f"桌面不可保活: {e.message}"}
+                # #75fixac: 指定桌面 preflight 失败 → 先开机再重试
+                try:
+                    from l3.desktop_power_once import ensure_powered_once
+
+                    self.log(
+                        "INFO",
+                        f"preflight 失败，尝试开机后重试 instance={instance_id[:20]}: {e.message}",
+                    )
+                    # force=True: preflight 已失败，必须尝试开机
+                    pr = ensure_powered_once(
+                        http,
+                        self._cfg,
+                        desktop=matched_desktop,
+                        machine_id=machine_id or str(self._cfg.get("machine_id") or ""),
+                        machine_name=str(
+                            getattr(matched_desktop, "machine_name", None)
+                            or self._cfg.get("machine_name")
+                            or ""
+                        ),
+                        instance_id=instance_id,
+                        save_cfg_fn=lambda c: self._save_cfg_from_dict(c),
+                        wait_s=float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15),
+                        force=True,
+                    )
+                    self._cfg = self._load_cfg() or self._cfg
+                    self.log(
+                        "INFO",
+                        f"开机结果 acted={pr.acted} skip={pr.skipped_reason or '-'} "
+                        f"status_after={pr.status_after or '-'}",
+                    )
+                    uptime = _call_with_relogin(lambda: _preflight_uptime(http, instance_id))
+                    self.log(
+                        "INFO",
+                        f"preflight ok (after power) instance={instance_id[:20]} uptime={uptime}",
+                    )
+                except EcloudError as e2:
+                    return {
+                        "ok": False,
+                        "error": f"桌面不可保活: {e.message}; 开机/重试: {e2.message}",
+                    }
+                except Exception as ex:
+                    return {
+                        "ok": False,
+                        "error": f"桌面不可保活: {e.message}; power_err={type(ex).__name__}",
+                    }
             with self._lock:
                 self._cfg["instance_id"] = instance_id
                 if machine_id:

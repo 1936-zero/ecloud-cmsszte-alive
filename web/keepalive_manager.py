@@ -658,16 +658,54 @@ class KeepaliveManager:
             # reload after save
             cfg = self._load_cfg_local() or cfg
 
+        # #75fixac: plain 存在时也要检查是否关机；关机则 operate=available + remint
+        need_remint_after_power = False
         if plain_ok:
-            host = self._resolve_cag_host(cfg)
-            self._log(
-                "INFO",
-                f"会话凭证已存在，跳过 mint；Path B host={host} "
-                f"src={cfg.get('gateway_source') or ''}",
-            )
-            return True
+            try:
+                from l3.desktop_power_once import ensure_powered_once
 
-        self._log("INFO", "未找到会话凭证文件，正在准备（仅首次开机 + 签发）…")
+                power_wait = float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15)
+                pr = ensure_powered_once(
+                    http,
+                    cfg,
+                    machine_id=machine_id or str(cfg.get("machine_id") or ""),
+                    machine_name=str(cfg.get("machine_name") or ""),
+                    instance_id=instance_id or str(cfg.get("instance_id") or ""),
+                    save_cfg_fn=self._save_cfg_local,
+                    wait_s=power_wait,
+                    force=False,
+                )
+                cfg = self._load_cfg_local() or cfg
+                if pr.acted:
+                    need_remint_after_power = True
+                    self._log(
+                        "INFO",
+                        "检测到桌面已关机，已调用开机(operate=available)，将重签发凭证…",
+                    )
+                else:
+                    host = self._resolve_cag_host(cfg)
+                    self._log(
+                        "INFO",
+                        f"会话凭证已存在，跳过 mint；Path B host={host} "
+                        f"src={cfg.get('gateway_source') or ''} "
+                        f"power_skip={pr.skipped_reason or '-'}",
+                    )
+                    return True
+            except Exception as e:
+                # power check failed: keep old plain path (do not block keepalive start)
+                host = self._resolve_cag_host(cfg)
+                self._log(
+                    "INFO",
+                    f"会话凭证已存在，跳过 mint；Path B host={host} "
+                    f"src={cfg.get('gateway_source') or ''} "
+                    f"(power_check_err={_safe_public_err(str(e))})",
+                )
+                return True
+
+        if not plain_ok:
+            self._log("INFO", "未找到会话凭证文件，正在准备（开机 + 签发）…")
+        elif need_remint_after_power:
+            self._log("INFO", "关机后已开机，正在重签发会话凭证…")
         try:
             plain.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -688,12 +726,13 @@ class KeepaliveManager:
             # 与 product_setup 调用对齐拉长读超时，避免 Read timed out. (read timeout=25.0)
             # #75fixw: mint 501/no_connectStr → force power + wait + remint
             # （默认 mint_power_retry=True / power_wait=DEFAULT_POWER_WAIT_S，与 CLI 共用）
+            # #75fixac: remint after power-on when plain already existed
             result = run_product_setup(
                 cfg=cfg,
                 client=http,
                 save_config=self._save_cfg_local,
                 plain_path=plain,
-                do_power=True,
+                do_power=not need_remint_after_power,  # already powered above
                 force_power=False,
                 do_mint=True,
                 do_path_b=False,
