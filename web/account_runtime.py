@@ -32,6 +32,7 @@ import device
 import desktop_list
 import desktop_session
 import login
+import login_rate_limit
 from ecloud_client import EcloudError, EcloudHttpUtil
 from l3.gateway_config import (
     gateway_from_custom_login_params,
@@ -561,12 +562,31 @@ class AccountRuntime:
         quiet=True：成功路径的「登录中/结果/成功」只写卡内 ring，不上 global
         （Path B / 账号保活 relogin 每轮静默刷新 token 时使用，避免淹没保活行）。
         失败/需短信仍始终上 global，便于用户感知。
+
+        #75fixam-fix: 10 分钟内同一用户名 WebUI 交互重登 ≤3 次，否则 locked。
+        quiet=True（Path B / AKA 静默刷 token）不计次；CLI 手动 login 也不走此限流。
         """
         try:
             username = (username or "").strip()
             password = password or ""
             if not username or not password:
                 return {"status": "failed", "error": "账号和密码不能为空"}
+
+            # rate limit before any network / clear_token
+            # quiet=True is keepalive silent token refresh — do NOT count
+            # (otherwise Path B / AKA relogin would lock the account in ~3 ticks).
+            if not quiet:
+                rate_err = login_rate_limit.guard_login(username)
+                if rate_err:
+                    try:
+                        self.log(
+                            "WARN",
+                            rate_err.get("error") or "账号已锁定（重登过频）",
+                            to_global=True,
+                        )
+                    except Exception:
+                        pass
+                    return rate_err
 
             http = self.get_http()
             try:
@@ -1199,15 +1219,12 @@ class AccountRuntime:
             return {"ok": False, "error": "账号保活间隔需在 30–3600 秒"}
 
         def _relogin():
-            username = self._username or self._cfg.get("username") or ""
-            password = self._cfg.get("password") or ""
-            if not username or not password:
-                self.log("WARN", "账号保活重登失败：缺用户名/密码")
-                return None
-            result = self.login(username=username, password=password)
-            if result.get("status") == "success" or result.get("ok") is True:
-                return self._cfg.get("access_token")
-            self.log("WARN", f"账号保活重登未完成: {result.get('status') or result.get('error')}")
+            # #75fixam-fix: MUST quiet — AKA tick must not consume login rate limit
+            # (was calling login(quiet=False) → WebUI 点启动保活几轮就把账号锁死)
+            tok = self.relogin()
+            if tok:
+                return tok
+            self.log("WARN", "账号保活重登未完成")
             return None
 
         http = self.get_http()
@@ -1395,6 +1412,11 @@ class AccountRegistry:
         return {"account": acc.public_meta()}
 
     def delete(self, account_id: str) -> dict:
+        """Remove card from index AND wipe backend dir (data/web_accounts/<id>/).
+
+        #75fixam-fix: previously only dropped index entry → orphan dirs piled up
+        and confused ops ("why so many test dirs / only few cards").
+        """
         with self._lock:
             acc = self._accounts.pop(account_id, None)
             if not acc:
@@ -1403,16 +1425,39 @@ class AccountRegistry:
                 acc.stop_keepalive()
             except Exception:
                 pass
+            try:
+                acc.stop_account_keepalive()
+            except Exception:
+                pass
+            disk_dir = acc.dir
+            label = acc.label
             self._write_index()
+        # rmtree outside lock; dir is no longer referenced by registry
+        removed = False
+        err_rm = None
+        try:
+            import shutil
+            if disk_dir.exists() and disk_dir.resolve().parent == self.root.resolve():
+                shutil.rmtree(disk_dir, ignore_errors=False)
+                removed = True
+            elif disk_dir.exists():
+                err_rm = f"拒绝删除：路径不在 web_accounts 根下 ({disk_dir})"
+        except Exception as e:
+            err_rm = str(e)
         self.append_global_log({
             "ts": _now_iso(),
-            "level": "INFO",
-            "msg": f"账号卡片已删除 id={account_id}",
+            "level": "INFO" if not err_rm else "WARN",
+            "msg": (
+                f"账号卡片已删除 id={account_id} dir_removed={removed}"
+                + (f" err={err_rm}" if err_rm else "")
+            ),
             "account_id": account_id,
-            "label": acc.label,
+            "label": label,
         })
-        # keep on-disk files for audit; do not wipe secrets aggressively here
-        return {"ok": True}
+        out = {"ok": True, "dir_removed": removed}
+        if err_rm:
+            out["dir_error"] = err_rm
+        return out
 
     def rename(self, account_id: str, label: str) -> dict:
         acc = self.get(account_id)

@@ -760,21 +760,33 @@
     renderLogFullBody(id);
   }
 
-  function softPollAccounts() {
-    /* 爱家 needFull：指纹不变只刷日志；配置弹窗打开时绝不整卡重渲 */
+  /* #75fixan P2-2: single accounts poller.
+   * forceFull=true  → always re-render cards (manual load / post-mutation)
+   * forceFull=false → fingerprint soft path (5s timer / burst); modal open → logs only
+   */
+  function loadAccounts(forceFull) {
+    forceFull = forceFull !== false; /* default true preserves old loadAccounts callers */
     return api("GET", "/api/accounts").then(function (res) {
       var list = res.accounts || res.data || [];
-      if (!Array.isArray(list)) list = [];
-      if (state.configPid) {
+      if (!Array.isArray(list)) {
+        if (res && res.ok === false) {
+          if (forceFull) showCErr(res.error || "加载账号失败");
+          list = [];
+        } else {
+          list = [];
+        }
+      }
+      /* config modal open: never full re-render cards (input focus / draft state) */
+      if (state.configPid && !forceFull) {
         state.accounts = list;
         updateTopStats();
         list.forEach(function (a) { refreshAccountLogs(a.id, false); });
-        return;
+        return list;
       }
       var prev = state.accounts || [];
       var prevMap = {};
       prev.forEach(function (a) { prevMap[a.id] = accountFingerprint(a); });
-      var needFull = list.length !== prev.length;
+      var needFull = !!forceFull || list.length !== prev.length;
       if (!needFull) {
         for (var i = 0; i < list.length; i++) {
           var id = list[i].id;
@@ -797,7 +809,15 @@
       } else {
         list.forEach(function (a) { refreshAccountLogs(a.id, false); });
       }
-    }).catch(function () {});
+      return list;
+    }).catch(function (e) {
+      /* soft poll stays silent; explicit load surfaces error */
+      if (forceFull) showCErr("加载账号失败: " + (e && e.message ? e.message : e));
+    });
+  }
+
+  function softPollAccounts() {
+    return loadAccounts(false);
   }
 
   /* #75fixal: after start/stop, burst-poll so red-card/button catches up faster than 5s tick */
@@ -811,24 +831,6 @@
       if (n < times) setTimeout(tick, gapMs);
     }
     tick();
-  }
-
-
-  function loadAccounts() {
-    return api("GET", "/api/accounts").then(function (res) {
-      var list = res.accounts || res.data || [];
-      if (!Array.isArray(list) && res.ok === false) {
-        showCErr(res.error || "加载账号失败");
-        list = [];
-      }
-      state.accounts = list;
-      renderCards();
-      /* card-logs-hook */
-      (state.accounts || []).forEach(function (a) { refreshAccountLogs(a.id); });
-      return list;
-    }).catch(function (e) {
-      showCErr("加载账号失败: " + e.message);
-    });
   }
 
   // #75fixr: 仅当表单账号与 current 卡 username 一致时复用；否则新建第二张卡

@@ -586,7 +586,12 @@ class KeepaliveManager:
     # ------------------------------------------------------------------ path B helpers
 
     def _plain_path(self) -> Path:
-        # Priority: instance override → env → cloud_pc.json plain_path → Docker-safe default
+        # #75fixan P1-1 dual-track plain:
+        # 1) instance override (Web multi-card: web_accounts/<id>/connectstr.plain)
+        # 2) env SHORT_CONNECT_PLAIN_FILE/PLAIN/ECLOUD_PLAIN — CLI single-account ONLY
+        #    (compose must NOT set this; serial credential risk across cards)
+        # 3) cloud_pc.json plain_path
+        # 4) Docker-safe default
         if self._plain_path_override is not None:
             return self._plain_path_override
         for env_key in ("SHORT_CONNECT_PLAIN_FILE", "PLAIN", "ECLOUD_PLAIN"):

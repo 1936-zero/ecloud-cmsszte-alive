@@ -10,16 +10,21 @@ services:
       TZ: Asia/Shanghai
       HOME: /tmp
       CLOUD_PC_CONFIG_FILE: /app/data/cloud_pc.json
-      # Docker-safe plain (HOME=/ would break ~/.cache); host can docker cp / remint
-      SHORT_CONNECT_PLAIN_FILE: /tmp/r26_t29_plain
+      # #75fixan P1-1: do NOT set SHORT_CONNECT_PLAIN_FILE here.
+      # Web multi-card uses per-account plain:
+      #   data/web_accounts/<id>/connectstr.plain (+ cloud_pc.json plain_path)
+      # Global env plain is CLI single-account fallback only (serial credential risk).
+      # Optional legacy/oracle dump dir (per-account out_dir still overrides KM):
       OUT_DIR: /tmp/ecloud-pathb/reports/spice_oracle_webui
       # product line pins (never jtydn / aijia)
       PIN_PRODUCT_LINE: public_ecloud_9222
     volumes:
       - ./data:/app/data
-      # installinfo: default stub (HTTP-only OK). For Path B SPICE set:
-      #   INSTALLINFO_HOST=/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini
-      - ${INSTALLINFO_HOST:-./docker/stubs/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
+      # installinfo [PublicKey].csap_id required for connectStr mint/decode.
+      # Default: host official CMSS client path (Path B capable). Override:
+      #   INSTALLINFO_HOST=./docker/stubs/installinfo.ini  # HTTP-only / CI
+      # Empty csap_id stub → mint fails: KeyError PublicKey.csap_id (#75fixan)
+      - ${INSTALLINFO_HOST:-/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
     # host network: NO ports: mapping; process binds host :8081 directly
     # ensure ./data is writable by uid 1000 (mkdir -p data && chown 1000:1000 data)
     restart: unless-stopped

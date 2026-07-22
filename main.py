@@ -80,7 +80,13 @@ def do_login(cfg: dict):
         password = getpass.getpass("password: ")
     cfg["username"], cfg["password"] = username, password
 
-    log.info("login %s ...", username)
+    # #75fixam-fix: CLI interactive login 不限流（用户明确：限流只挡 WebUI 交互重登，
+    # 避免运维/CLI 被误伤；保活 quiet 路径本来也不计次）
+    # 文案提示：WebUI 交互登录仍有 10 分钟 ≤3 次保护，CLI 手动登录不受影响
+    log.info(
+        "login %s ... (CLI 不限流；WebUI 交互登录 10 分钟内 ≤3 次，超限会临时锁定)",
+        username,
+    )
     result = login.login_with_password(client, username, password)
 
     if result["status"] == login.LoginResult.SUCCESS:
