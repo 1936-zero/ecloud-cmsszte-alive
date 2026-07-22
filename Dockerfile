@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN mkdir -p /app/data && chmod 0775 /app/data
 
-EXPOSE 8080
+EXPOSE 8081
 
 ENTRYPOINT ["python", "main.py"]
-CMD ["web", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["web", "--host", "0.0.0.0", "--port", "8081"]

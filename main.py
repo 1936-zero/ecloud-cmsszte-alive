@@ -176,12 +176,22 @@ def cmd_login(args):
 
 
 def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
-    """Pick instance_id/machine_id from CLI, cfg cache, or auto desktop list."""
+    """Pick instance_id/machine_id (+ origin) from CLI, cfg cache, or auto list.
+
+    Returns (instance_id, machine_id, origin_company_code).
+    #75fixaj: origin drives CMSSZTE→path_b / non-CMSS→http routing.
+    """
     import desktop_list
 
     instance_id = getattr(args, "instance_id", None) or cfg.get("instance_id") or ""
     machine_id = getattr(args, "machine_id", None) or cfg.get("machine_id") or ""
+    origin = (
+        getattr(args, "origin_company", None)
+        or cfg.get("origin_company_code")
+        or ""
+    )
     no_auto = bool(getattr(args, "no_auto_select", False))
+    desktop = None
 
     if not instance_id and not no_auto:
         log.info("auto-selecting desktop from /user/getDeviceInfo ...")
@@ -198,7 +208,30 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
             sys.exit(1)
         instance_id = desktop.instance_id
         machine_id = desktop.machine_id or machine_id
-        log.info("auto-selected: %s", desktop)
+        origin = getattr(desktop, "origin_company_code", "") or origin
+        log.info("auto-selected: %s origin=%s", desktop, origin or "?")
+    elif instance_id and not origin:
+        # Look up origin for specified instance so vendor routing is correct
+        try:
+            desktops = desktop_list.get_desktop_list(client)
+            for d in desktops:
+                if d.instance_id == instance_id:
+                    desktop = d
+                    machine_id = machine_id or d.machine_id or ""
+                    origin = getattr(d, "origin_company_code", "") or origin
+                    break
+        except EcloudError as e:
+            log.warning("origin lookup failed: %s", e)
+            if _token_maybe_expired(e) and relogin_fn and relogin_fn():
+                try:
+                    desktops = desktop_list.get_desktop_list(client)
+                    for d in desktops:
+                        if d.instance_id == instance_id:
+                            origin = getattr(d, "origin_company_code", "") or origin
+                            machine_id = machine_id or d.machine_id or ""
+                            break
+                except EcloudError:
+                    pass
 
     if not instance_id:
         log.error("need instance_id (CLI / cfg / auto-select).")
@@ -207,8 +240,10 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
     cfg["instance_id"] = instance_id
     if machine_id:
         cfg["machine_id"] = machine_id
+    if origin:
+        cfg["origin_company_code"] = origin
     save_config(cfg)
-    return instance_id, machine_id
+    return instance_id, machine_id, (origin or "")
 
 
 def _run_spice_oracle_entry(args, cfg, client, relogin_fn):
@@ -217,7 +252,8 @@ def _run_spice_oracle_entry(args, cfg, client, relogin_fn):
 
     from l3.spice_oracle_keepalive_loop import run_spice_oracle_keepalive_loop
 
-    instance_id, machine_id = _resolve_desktop_for_spice(
+    # #75fixaj: resolver now returns (instance_id, machine_id, origin)
+    instance_id, machine_id, _origin = _resolve_desktop_for_spice(
         args, cfg, client, relogin_fn
     )
     plain = Path(getattr(args, "plain", "") or "/tmp/r26_t29_plain")
@@ -505,10 +541,14 @@ def cmd_logout(args):
 
 
 def cmd_desktop_keepalive(args):
-    """Default: SPICE path_B HEART + status/uptime oracle (claim=false).
+    """Desktop keepalive with vendor routing (#75fixaj).
 
-    Pure HTTP desktopUptime is NOT the primary keep-alive plane anymore.
-    --legacy-http: old desktopUptime-only loop (opt-in; not L3).
+    Flow: login → resolve desktop → power-on(preflight path) →
+      CMSSZTE/ZTE → SPICE path_B (claim=false)
+      non-CMSSZTE (H3C etc.) → pure HTTP desktopUptime
+
+    --legacy-http: force HTTP loop regardless of vendor.
+    --force-path-b: force Path B regardless of vendor (needs plain).
     """
     import desktop_session
 
@@ -523,17 +563,65 @@ def cmd_desktop_keepalive(args):
     def _relogin():
         log.info("relogin %s", cfg.get("username"))
         t = do_login(cfg)
-        if t:
-            client.set_token(t)
-        return t
+        # #75fixaj: only set non-empty str token (do_login already returns str|None)
+        if isinstance(t, str) and t.strip():
+            client.set_token(t.strip())
+            return t.strip()
+        return None
 
-    if bool(getattr(args, "legacy_http", False)):
-        log.warning(
-            "legacy-http desktopUptime-only: NOT primary keep-alive "
-            "(SPICE path_B is default; claim=false)"
-        )
-        instance_id, machine_id = _resolve_desktop_for_spice(
-            args, cfg, client, _relogin
+    instance_id, machine_id, origin = _resolve_desktop_for_spice(
+        args, cfg, client, _relogin
+    )
+
+    # #75fixaj: always power-on first (both Path B and HTTP), same as WebUI.
+    # Docstring promised this; was missing → shutdown desktop skipped operate.
+    if not bool(getattr(args, "no_power", False)):
+        from l3.desktop_power_once import ensure_powered_once
+        from l3.product_setup import DEFAULT_POWER_WAIT_S
+
+        _pw = getattr(args, "power_wait", None)
+        power_wait_s = float(DEFAULT_POWER_WAIT_S if _pw is None else _pw)
+        try:
+            pr = ensure_powered_once(
+                client,
+                cfg,
+                machine_id=machine_id or "",
+                instance_id=instance_id or "",
+                wait_s=power_wait_s,
+                save_cfg_fn=save_config,
+            )
+            log.info(
+                "desktop-keepalive power_once acted=%s skip=%s "
+                "status_before=%s status_after=%s wait_s=%s",
+                pr.acted,
+                pr.skipped_reason or "-",
+                pr.status_before or "-",
+                pr.status_after or "-",
+                power_wait_s,
+            )
+        except Exception as e:
+            log.warning(
+                "desktop-keepalive power_once failed (continue to route): %s",
+                e,
+            )
+
+    origin_u = (origin or "").strip().upper()
+    force_http = bool(getattr(args, "legacy_http", False))
+    force_path_b = bool(getattr(args, "force_path_b", False))
+
+    # Vendor routing: CMSSZTE/ZTEECloud/ZTE → path_b; else → http
+    is_cmss = origin_u in ("CMSSZTE", "ZTEECLOUD", "ZTE")
+    use_http = force_http or (not force_path_b and origin_u and not is_cmss)
+    # Unknown origin with no force: keep historical default path_b
+    if not origin_u and not force_http:
+        use_http = False
+
+    if use_http:
+        log.info(
+            "HTTP desktopUptime keepalive: origin=%s force_http=%s "
+            "(non-CMSSZTE or --legacy-http; claim=false)",
+            origin_u or "?",
+            force_http,
         )
         ticket = getattr(args, "ticket", None) or cfg.get("ticket") or ""
         if ticket:
@@ -550,6 +638,11 @@ def cmd_desktop_keepalive(args):
         )
         return
 
+    log.info(
+        "Path B keepalive: origin=%s force_path_b=%s (CMSSZTE path; claim=false)",
+        origin_u or "?",
+        force_path_b,
+    )
     _run_spice_oracle_entry(args, cfg, client, _relogin)
 
 
@@ -968,6 +1061,44 @@ def cmd_path_a_probe(args):
     _print_vendor_profile(profile, origin=origin, source=source)
 
 
+
+def _add_shared_path_b_loop_args(ap, *, out_dir_default: str, with_account_ping: bool = True):
+    """#75fixal: shared path_B loop flags for keepalive / desktop-keepalive (claim=false)."""
+    ap.add_argument("--interval", type=int, default=300,
+                    help="interval seconds (default 300)")
+    ap.add_argument("--rounds", type=int, default=None,
+                    help="max rounds (default unlimited; 312≈26h @300s)")
+    ap.add_argument("--host", default="36.212.224.105",
+                    help="CAG host (public only; default 36.212.224.105)")
+    ap.add_argument("--plain", default="/tmp/r26_t29_plain",
+                    help="connectStr plain path (contents never logged)")
+    ap.add_argument("--pre", default="/tmp/t14_100", help="pre-TLS template dir")
+    ap.add_argument("--post", default="/tmp/t14_tls_plain", help="post-TLS template dir")
+    ap.add_argument("--heart-listen", type=float, default=60.0,
+                    help="per-round HEART listen window seconds (default 60)")
+    ap.add_argument("--ticket-mode", default="zeros",
+                    help="ticket mode (default zeros; claim=false)")
+    ap.add_argument("--session-nudge", action="store_true", default=None,
+                    help="enable session nudge (optional)")
+    ap.add_argument("--agent-hb-every", type=float, default=0.0,
+                    help="agent hb every N seconds (default 0=off)")
+    ap.add_argument("--out-dir", default=out_dir_default,
+                    help="jsonl/meta output dir")
+    if with_account_ping:
+        ap.add_argument("--no-account-ping", action="store_true",
+                        help="skip L1 account HTTP ping each round")
+    ap.add_argument("--stop-on-fatal", action="store_true",
+                    help="stop loop on hard SPICE fail (default continue)")
+    ap.add_argument(
+        "--no-auto-remint", action="store_true",
+        help="disable auto remint on auth220/handshake fail (default: remint once+retry)",
+    )
+    ap.add_argument(
+        "--remint-timeout", type=float, default=20.0,
+        help="connectStr mint timeout seconds when auto-remint (default 20)",
+    )
+
+
 def main():
     p = argparse.ArgumentParser(
         description="Ecloud Cloud Computer V3.8.2 keepalive tool",
@@ -984,10 +1115,6 @@ def main():
             "(default; claim=false). --legacy-http for old L1 HTTP only"
         ),
     )
-    ka.add_argument("--interval", type=int, default=300,
-                    help="interval seconds (default 300)")
-    ka.add_argument("--rounds", type=int, default=None,
-                    help="max rounds (default unlimited; 312≈26h @300s)")
     ka.add_argument(
         "--legacy-http", action="store_true",
         help="opt-in: old L1 account HTTP keepalive only (NOT desktop/SPICE)",
@@ -996,34 +1123,7 @@ def main():
     ka.add_argument("--machine-id", help="desktop machine ID (UUID), optional")
     ka.add_argument("--no-auto-select", action="store_true",
                     help="disable auto desktop selection (require --instance-id)")
-    ka.add_argument("--host", default="36.212.224.105",
-                    help="CAG host (public only; default 36.212.224.105)")
-    ka.add_argument("--plain", default="/tmp/r26_t29_plain",
-                    help="connectStr plain path (contents never logged)")
-    ka.add_argument("--pre", default="/tmp/t14_100", help="pre-TLS template dir")
-    ka.add_argument("--post", default="/tmp/t14_tls_plain", help="post-TLS template dir")
-    ka.add_argument("--heart-listen", type=float, default=60.0,
-                    help="per-round HEART listen window seconds (default 60)")
-    ka.add_argument("--ticket-mode", default="zeros",
-                    help="ticket mode (default zeros; claim=false)")
-    ka.add_argument("--session-nudge", action="store_true", default=None,
-                    help="enable session nudge (optional)")
-    ka.add_argument("--agent-hb-every", type=float, default=0.0,
-                    help="agent hb every N seconds (default 0=off)")
-    ka.add_argument("--out-dir", default="reports/r26_live/spice_oracle_soak",
-                    help="jsonl/meta output dir")
-    ka.add_argument("--no-account-ping", action="store_true",
-                    help="skip L1 account HTTP ping each round")
-    ka.add_argument("--stop-on-fatal", action="store_true",
-                    help="stop loop on hard SPICE fail (default continue)")
-    ka.add_argument(
-        "--no-auto-remint", action="store_true",
-        help="disable auto remint on auth220/handshake fail (default: remint once+retry)",
-    )
-    ka.add_argument(
-        "--remint-timeout", type=float, default=20.0,
-        help="connectStr mint timeout seconds when auto-remint (default 20)",
-    )
+    _add_shared_path_b_loop_args(ka, out_dir_default="reports/r26_live/spice_oracle_soak")
     ka.add_argument(
         "--plain-ttl", type=float, default=0.0,
         help="proactive remint when plain mtime age >= N seconds (0=off)",
@@ -1107,44 +1207,26 @@ def main():
     dka.add_argument("--instance-id", help="desktop instance ID (CCA-xxxx); omit to auto-select")
     dka.add_argument("--machine-id", help="desktop machine ID (UUID), optional")
     dka.add_argument("--ticket", help="session ticket (ticket:xxxx), optional; legacy-http only")
-    dka.add_argument("--interval", type=int, default=300,
-                     help="interval seconds (default 300)")
-    dka.add_argument("--rounds", type=int, default=None,
-                     help="max rounds (default unlimited; 312≈26h @300s)")
     dka.add_argument("--no-auto-select", action="store_true",
                      help="disable auto desktop selection (require --instance-id)")
     dka.add_argument(
         "--legacy-http", action="store_true",
-        help="opt-in: pure desktopUptime HTTP only (NOT primary keep-alive)",
-    )
-    dka.add_argument("--host", default="36.212.224.105",
-                     help="CAG host (public only; default 36.212.224.105)")
-    dka.add_argument("--plain", default="/tmp/r26_t29_plain",
-                     help="connectStr plain path (contents never logged)")
-    dka.add_argument("--pre", default="/tmp/t14_100", help="pre-TLS template dir")
-    dka.add_argument("--post", default="/tmp/t14_tls_plain", help="post-TLS template dir")
-    dka.add_argument("--heart-listen", type=float, default=60.0,
-                     help="per-round HEART listen window seconds (default 60)")
-    dka.add_argument("--ticket-mode", default="zeros",
-                     help="ticket mode (default zeros; claim=false)")
-    dka.add_argument("--session-nudge", action="store_true", default=None,
-                     help="enable session nudge (optional)")
-    dka.add_argument("--agent-hb-every", type=float, default=0.0,
-                     help="agent hb every N seconds (default 0=off)")
-    dka.add_argument("--out-dir", default="reports/r26_live/spice_oracle_soak",
-                     help="jsonl/meta output dir")
-    dka.add_argument("--no-account-ping", action="store_true",
-                     help="skip L1 account HTTP ping each round")
-    dka.add_argument("--stop-on-fatal", action="store_true",
-                     help="stop loop on hard SPICE fail (default continue)")
-    dka.add_argument(
-        "--no-auto-remint", action="store_true",
-        help="disable auto remint on auth220/handshake fail (default: remint once+retry)",
+        help="opt-in: force pure desktopUptime HTTP (bypass vendor routing)",
     )
     dka.add_argument(
-        "--remint-timeout", type=float, default=20.0,
-        help="connectStr mint timeout seconds when auto-remint (default 20)",
+        "--force-path-b", action="store_true",
+        help="#75fixaj: force SPICE path_B regardless of originCompanyCode",
     )
+    dka.add_argument(
+        "--no-power", action="store_true",
+        help="#75fixaj: skip ensure_powered_once preflight (default: power first)",
+    )
+    dka.add_argument(
+        "--power-wait", type=float, default=None,
+        help="#75fixaj: wait seconds after operate=available "
+        "(default CLOUD_PC_POWER_WAIT or 60)",
+    )
+    _add_shared_path_b_loop_args(dka, out_dir_default="reports/r26_live/spice_oracle_soak")
 
     sub.add_parser("list-desktops", help="try to fetch desktop list")
     sd = sub.add_parser(

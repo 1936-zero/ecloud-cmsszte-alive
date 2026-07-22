@@ -672,78 +672,84 @@ def create_app() -> Flask:
     # -----------------------------------------------------------------------
     @app.route("/api/login", methods=["POST"])
     def api_login():
-        data = request.get_json(force=True)
-        username = data.get("username", "").strip()
-        password = data.get("password", "")
-        if not username or not password:
-            return jsonify({"status": "failed", "error": "账号和密码不能为空"}), 400
+        try:
+            data = request.get_json(force=True)
+            username = data.get("username", "").strip()
+            password = data.get("password", "")
+            if not username or not password:
+                return jsonify({"status": "failed", "error": "账号和密码不能为空"}), 400
 
-        http = _get_or_create_http()
-        http.clear_token()
-        result = login.login_with_password(http, username, password)
-        log.info("login result: %s", json.dumps(_safe_log_obj({
-            "status": result.get("status"),
-            "error_code": result.get("error_code"),
-            "error": result.get("error"),
-            "mobile_present": bool(result.get("mobile")),
-            "login_code_present": bool(result.get("login_code")),
-        }), ensure_ascii=False))
+            http = _get_or_create_http()
+            http.clear_token()
+            result = login.login_with_password(http, username, password)
+            log.info("login result: %s", json.dumps(_safe_log_obj({
+                "status": result.get("status"),
+                "error_code": result.get("error_code"),
+                "error": result.get("error"),
+                "mobile_present": bool(result.get("mobile")),
+                "login_code_present": bool(result.get("login_code")),
+            }), ensure_ascii=False))
 
-        with _lock:
-            _app_state["username"] = username
-            _app_state["password"] = password
-            _app_state["cfg"]["username"] = username
-            _app_state["cfg"]["password"] = password
-
-        if result["status"] == login.LoginResult.SUCCESS:
-            token = result["access_token"]
-            _set_token(token)
-            _save_cfg(_app_state["cfg"])
-            return jsonify({"status": "success", "token": token[:20] + "..."})
-
-        if result["status"] == login.LoginResult.NEED_DEVICE_TRUST:
             with _lock:
-                _app_state["mobile"] = result.get("mobile", "")
-                _app_state["login_type"] = "device_trust"
-                _app_state["login_code"] = result.get("login_code")
-            return jsonify({
-                "status": "need_sms",
-                "mobile": result.get("mobile", ""),
-                "login_type": "device_trust",
-                "message": "该设备未授信，需要短信验证",
-            })
+                _app_state["username"] = username
+                _app_state["password"] = password
+                _app_state["cfg"]["username"] = username
+                _app_state["cfg"]["password"] = password
 
-        if result["status"] == login.LoginResult.NEED_TWO_FACTOR:
-            with _lock:
-                _app_state["mobile"] = result.get("mobile", "")
-                _app_state["login_type"] = "two_factor"
-                _app_state["login_code"] = result.get("login_code")
-            return jsonify({
-                "status": "need_sms",
-                "mobile": result.get("mobile", ""),
-                "login_type": "two_factor",
-                "message": "需要二次验证",
-            })
+            if result["status"] == login.LoginResult.SUCCESS:
+                token = result["access_token"]
+                _set_token(token)
+                _save_cfg(_app_state["cfg"])
+                return jsonify({"status": "success", "token": token[:20] + "..."})
 
-        if result["status"] == login.LoginResult.NEED_ENHANCED_SMS:
-            with _lock:
-                _app_state["mobile"] = result.get("mobile", "")
-                _app_state["login_type"] = "enhanced_sms"
-                _app_state["login_code"] = result.get("login_code")
-            return jsonify({
-                "status": "need_sms",
-                "mobile": result.get("mobile", ""),
-                "login_type": "enhanced_sms",
-                "message": "需要增强策略短信验证",
-            })
+            if result["status"] == login.LoginResult.NEED_DEVICE_TRUST:
+                with _lock:
+                    _app_state["mobile"] = result.get("mobile", "")
+                    _app_state["login_type"] = "device_trust"
+                    _app_state["login_code"] = result.get("login_code")
+                return jsonify({
+                    "status": "need_sms",
+                    "mobile": result.get("mobile", ""),
+                    "login_type": "device_trust",
+                    "message": "该设备未授信，需要短信验证",
+                })
 
-        if result["status"] == login.LoginResult.NEED_4A:
-            return jsonify({
-                "status": "failed",
-                "error": "需要 4A MFA 验证，暂不支持",
-            })
+            if result["status"] == login.LoginResult.NEED_TWO_FACTOR:
+                with _lock:
+                    _app_state["mobile"] = result.get("mobile", "")
+                    _app_state["login_type"] = "two_factor"
+                    _app_state["login_code"] = result.get("login_code")
+                return jsonify({
+                    "status": "need_sms",
+                    "mobile": result.get("mobile", ""),
+                    "login_type": "two_factor",
+                    "message": "需要二次验证",
+                })
 
-        return jsonify({"status": "failed", "error": result.get("error", "登录失败")})
+            if result["status"] == login.LoginResult.NEED_ENHANCED_SMS:
+                with _lock:
+                    _app_state["mobile"] = result.get("mobile", "")
+                    _app_state["login_type"] = "enhanced_sms"
+                    _app_state["login_code"] = result.get("login_code")
+                return jsonify({
+                    "status": "need_sms",
+                    "mobile": result.get("mobile", ""),
+                    "login_type": "enhanced_sms",
+                    "message": "需要增强策略短信验证",
+                })
+
+            if result["status"] == login.LoginResult.NEED_4A:
+                return jsonify({
+                    "status": "failed",
+                    "error": "需要 4A MFA 验证，暂不支持",
+                })
+
+            return jsonify({"status": "failed", "error": result.get("error", "登录失败")})
+
+        except Exception as e:
+            # #75fixal: wrong-password / network / RSA must never 500
+            logging.getLogger(__name__).exception("api_login failed: %s", e)
+            return jsonify({"status": "failed", "error": f"登录异常: {type(e).__name__}: {e}"})
 
     @app.route("/api/send-sms", methods=["POST"])
     def api_send_sms():
@@ -1156,19 +1162,25 @@ def create_app() -> Flask:
 
     @app.route("/api/accounts/<account_id>/login", methods=["POST"])
     def api_accounts_login(account_id: str):
-        acc, err = _acc_or_404(account_id)
-        if err:
-            return err
-        data = request.get_json(force=True, silent=True) or {}
-        username = str(data.get("username") or "").strip()
-        password = str(data.get("password") or "")
-        # allow re-login with stored creds when body empty
-        if not username:
-            username = str(acc._cfg.get("username") or acc._username or "").strip()
-        if not password:
-            password = str(acc._cfg.get("password") or acc._password or "")
-        result = acc.login(username, password)
-        return jsonify({**result, "account": acc.public_meta()})
+        try:
+            acc, err = _acc_or_404(account_id)
+            if err:
+                return err
+            data = request.get_json(force=True, silent=True) or {}
+            username = str(data.get("username") or "").strip()
+            password = str(data.get("password") or "")
+            # allow re-login with stored creds when body empty
+            if not username:
+                username = str(acc._cfg.get("username") or acc._username or "").strip()
+            if not password:
+                password = str(acc._cfg.get("password") or acc._password or "")
+            result = acc.login(username, password)
+            return jsonify({**result, "account": acc.public_meta()})
+
+        except Exception as e:
+            # #75fixal: account login must return JSON 200 with failed, never 500
+            logging.getLogger(__name__).exception("api_accounts_login %s: %s", account_id, e)
+            return jsonify({"status": "failed", "error": f"登录异常: {type(e).__name__}: {e}", "ok": False})
 
     @app.route("/api/accounts/<account_id>/send-sms", methods=["POST"])
     def api_accounts_send_sms(account_id: str):

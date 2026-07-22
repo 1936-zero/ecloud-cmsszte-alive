@@ -439,6 +439,14 @@ class AccountRuntime:
             return self._http
 
     def set_token(self, token: str) -> None:
+        # #75fixaj: only persist non-empty str (block bool True from bad relogin)
+        if not isinstance(token, str) or not token.strip():
+            self.log(
+                "WARN",
+                f"set_token ignored non-str/empty token type={type(token).__name__}",
+            )
+            return
+        token = token.strip()
         with self._lock:
             self._cfg["access_token"] = token
             self._save_cfg()
@@ -554,85 +562,101 @@ class AccountRuntime:
         （Path B / 账号保活 relogin 每轮静默刷新 token 时使用，避免淹没保活行）。
         失败/需短信仍始终上 global，便于用户感知。
         """
-        username = (username or "").strip()
-        password = password or ""
-        if not username or not password:
-            return {"status": "failed", "error": "账号和密码不能为空"}
-
-        http = self.get_http()
         try:
-            http.clear_token()
-        except Exception:
-            pass
+            username = (username or "").strip()
+            password = password or ""
+            if not username or not password:
+                return {"status": "failed", "error": "账号和密码不能为空"}
 
-        with self._lock:
-            self._username = username
-            self._password = password
-            self._cfg["username"] = username
-            self._cfg["password"] = password
-            self._cfg["updated_at"] = _now_iso()
-            self._save_cfg()
+            http = self.get_http()
+            try:
+                http.clear_token()
+            except Exception:
+                pass
 
-        # quiet 成功：卡内 only；失败/非 success：仍 to_global 便于排查
-        self.log("INFO", f"登录中: user={username}", to_global=not quiet)
-        result = login.login_with_password(http, username, password)
-        _ok = result.get("status") == login.LoginResult.SUCCESS
-        self.log(
-            "INFO",
-            f"登录结果: {json.dumps(_safe_log_obj({'status': result.get('status'), 'error': result.get('error'), 'error_code': result.get('error_code')}), ensure_ascii=False)}",
-            to_global=(not quiet) or (not _ok),
-        )
-
-        if result["status"] == login.LoginResult.SUCCESS:
-            token = result["access_token"]
-            self.set_token(token)
-            self.log("INFO", "登录成功", to_global=not quiet)
-            aka = self._autostart_account_keepalive_after_login()
-            out = {"status": "success", "token": token[:20] + "..."}
-            if aka is not None:
-                out["account_keepalive"] = aka
-            return out
-
-        if result["status"] == login.LoginResult.NEED_DEVICE_TRUST:
             with self._lock:
-                self._mobile = result.get("mobile", "") or ""
-                self._login_type = "device_trust"
-                self._login_code = result.get("login_code")
-            return {
-                "status": "need_sms",
-                "mobile": self._mobile,
-                "login_type": "device_trust",
-                "message": "该设备未授信，需要短信验证",
-            }
+                self._username = username
+                self._password = password
+                self._cfg["username"] = username
+                self._cfg["password"] = password
+                self._cfg["updated_at"] = _now_iso()
+                self._save_cfg()
 
-        if result["status"] == login.LoginResult.NEED_TWO_FACTOR:
-            with self._lock:
-                self._mobile = result.get("mobile", "") or ""
-                self._login_type = "two_factor"
-                self._login_code = result.get("login_code")
-            return {
-                "status": "need_sms",
-                "mobile": self._mobile,
-                "login_type": "two_factor",
-                "message": "需要二次短信验证",
-            }
+            # quiet 成功：卡内 only；失败/非 success：仍 to_global 便于排查
+            self.log("INFO", f"登录中: user={username}", to_global=not quiet)
+            result = login.login_with_password(http, username, password)
+            _ok = result.get("status") == login.LoginResult.SUCCESS
+            self.log(
+                "INFO",
+                f"登录结果: {json.dumps(_safe_log_obj({'status': result.get('status'), 'error': result.get('error'), 'error_code': result.get('error_code')}), ensure_ascii=False)}",
+                to_global=(not quiet) or (not _ok),
+            )
 
-        if result["status"] == login.LoginResult.NEED_ENHANCED_SMS:
-            with self._lock:
-                self._mobile = result.get("mobile", "") or ""
-                self._login_type = "enhanced_sms"
-                self._login_code = result.get("login_code")
-            return {
-                "status": "need_sms",
-                "mobile": self._mobile,
-                "login_type": "enhanced_sms",
-                "message": "需要增强策略短信验证",
-            }
+            if result["status"] == login.LoginResult.SUCCESS:
+                token = result["access_token"]
+                self.set_token(token)
+                self.log("INFO", "登录成功", to_global=not quiet)
+                aka = self._autostart_account_keepalive_after_login()
+                # #75fixaj: expose full access_token for relogin_fn consumers
+                # (UI still only sees truncated "token" field)
+                out = {
+                    "status": "success",
+                    "token": token[:20] + "...",
+                    "access_token": token,
+                }
+                if aka is not None:
+                    out["account_keepalive"] = aka
+                return out
 
-        if result["status"] == login.LoginResult.NEED_4A:
-            return {"status": "failed", "error": "需要 4A MFA 验证，暂不支持"}
+            if result["status"] == login.LoginResult.NEED_DEVICE_TRUST:
+                with self._lock:
+                    self._mobile = result.get("mobile", "") or ""
+                    self._login_type = "device_trust"
+                    self._login_code = result.get("login_code")
+                return {
+                    "status": "need_sms",
+                    "mobile": self._mobile,
+                    "login_type": "device_trust",
+                    "message": "该设备未授信，需要短信验证",
+                }
 
-        return {"status": "failed", "error": result.get("error", "登录失败")}
+            if result["status"] == login.LoginResult.NEED_TWO_FACTOR:
+                with self._lock:
+                    self._mobile = result.get("mobile", "") or ""
+                    self._login_type = "two_factor"
+                    self._login_code = result.get("login_code")
+                return {
+                    "status": "need_sms",
+                    "mobile": self._mobile,
+                    "login_type": "two_factor",
+                    "message": "需要二次短信验证",
+                }
+
+            if result["status"] == login.LoginResult.NEED_ENHANCED_SMS:
+                with self._lock:
+                    self._mobile = result.get("mobile", "") or ""
+                    self._login_type = "enhanced_sms"
+                    self._login_code = result.get("login_code")
+                return {
+                    "status": "need_sms",
+                    "mobile": self._mobile,
+                    "login_type": "enhanced_sms",
+                    "message": "需要增强策略短信验证",
+                }
+
+            if result["status"] == login.LoginResult.NEED_4A:
+                return {"status": "failed", "error": "需要 4A MFA 验证，暂不支持"}
+
+            return {"status": "failed", "error": result.get("error", "登录失败")}
+
+        except Exception as e:
+            # #75fixal: never raise to Flask (wrong-password / net / RSA) → 500
+            err = f"{type(e).__name__}: {e}"
+            try:
+                self.log("ERROR", f"登录异常: {err}", to_global=True)
+            except Exception:
+                pass
+            return {"status": "failed", "error": f"登录异常: {err}"}
 
     def send_sms(self, mobile: str = "") -> dict:
         with self._lock:
@@ -715,7 +739,12 @@ class AccountRuntime:
                 self._mobile = mobile
             self.log("INFO", "短信验证成功，已登录")
             aka = self._autostart_account_keepalive_after_login()
-            out = {"status": "success", "token": token[:20] + "..."}
+            # #75fixaj: expose full access_token for relogin_fn consumers
+            out = {
+                "status": "success",
+                "token": token[:20] + "...",
+                "access_token": token,
+            }
             if aka is not None:
                 out["account_keepalive"] = aka
             return out
@@ -731,16 +760,26 @@ class AccountRuntime:
             "raw": _safe_log_obj(r.get("raw")),
         }
 
-    def relogin(self) -> bool:
+    def relogin(self):
+        """Re-login and return access_token str on success, else None/False.
+
+        #75fixaj: MUST return token string (not bool). AKA/PathB do
+        `if tok: http.set_token(tok)`; bool True previously corrupted token.
+        Truthy non-empty str still works for legacy `if self.relogin():` callers.
+        """
         with self._lock:
             username = str(self._cfg.get("username") or self._username or "").strip()
             password = str(self._cfg.get("password") or self._password or "")
         if not username or not password:
             self.log("ERROR", "重登失败：缺少已保存账号密码")
-            return False
+            return None
         # Path B / AKA 轮次 relogin：成功明细不刷 global，避免淹没 heart/保活行
         r = self.login(username, password, quiet=True)
-        return r.get("status") == "success"
+        if r.get("status") != "success":
+            return None
+        tok = r.get("access_token") or self._cfg.get("access_token") or ""
+        tok = str(tok).strip() if tok else ""
+        return tok or None
 
     # ------------------------------------------------------------------ desktops
     def list_desktops(self) -> dict:
@@ -944,10 +983,15 @@ class AccountRuntime:
                     return {"ok": False, "error": f"没有可保活桌面：{detail}"}
                 instance_id = selected.instance_id
                 machine_id = selected.machine_id
+                matched_desktop = selected  # #75fixaj: keep for vendor mode routing
                 with self._lock:
                     self._cfg["instance_id"] = instance_id
                     self._cfg["machine_id"] = machine_id
                     self._cfg["machine_name"] = getattr(selected, "machine_name", "") or ""
+                    # #75fixaj: persist origin for mode routing on restart
+                    self._cfg["origin_company_code"] = (
+                        getattr(selected, "origin_company_code", "") or ""
+                    )
                     # #75fixy: region CAG from machineList[].customLoginParams
                     self._apply_desktop_gateway_locked(selected)
                     self._cfg["updated_at"] = _now_iso()
@@ -1031,9 +1075,40 @@ class AccountRuntime:
                 if matched_desktop is not None:
                     if getattr(matched_desktop, "machine_name", None):
                         self._cfg["machine_name"] = matched_desktop.machine_name or ""
+                    # #75fixaj: persist origin for mode routing
+                    occ = getattr(matched_desktop, "origin_company_code", "") or ""
+                    if occ:
+                        self._cfg["origin_company_code"] = occ
                     self._apply_desktop_gateway_locked(matched_desktop)
                 self._cfg["updated_at"] = _now_iso()
                 self._save_cfg()
+
+        # #75fixaj: CMSSZTE/ZTEECloud → path_b; others (H3C etc.) → pure HTTP
+        origin = ""
+        if matched_desktop is not None:
+            origin = str(getattr(matched_desktop, "origin_company_code", "") or "")
+        if not origin:
+            # auto-select path may have stored selected desktop earlier
+            try:
+                origin = str(
+                    (self._cfg.get("origin_company_code") or "")
+                    or (self._cfg.get("vendor") or "")
+                    or ""
+                )
+            except Exception:
+                origin = ""
+        origin_u = origin.strip().upper()
+        mode = (
+            "path_b"
+            if origin_u in ("CMSSZTE", "ZTEECLOUD", "ZTE")
+            else "http"
+        )
+        # When origin unknown but user force-path-b not set, default path_b only
+        # if historical default; prefer http for safety on unknown non-CMSS.
+        # Spec: CMSSZTE → PathB / non-CMSS → HTTP. Unknown → try path_b only if
+        # no origin hint at all was common for single-desktop CMSS accounts.
+        if not origin_u:
+            mode = "path_b"  # legacy single-vendor accounts
 
         ok = self.km.start(
             http,
@@ -1042,10 +1117,16 @@ class AccountRuntime:
             ticket="",
             interval=interval,
             relogin_fn=_relogin,
+            mode=mode,
         )
         if not ok:
             return {"ok": False, "error": "该账号保活已在运行"}
-        self.log("INFO", f"已启动 Path B 保活 interval={interval}s instance={instance_id[:20]}")
+        label = "Path B" if mode == "path_b" else "HTTP"
+        self.log(
+            "INFO",
+            f"已启动 {label} 保活 interval={interval}s instance={instance_id[:20]} "
+            f"mode={mode} origin={origin_u or '?'}",
+        )
         # Align CLI: starting desktop keepalive also starts account login-state keepalive
         aka_res = self.start_account_keepalive()
         if not aka_res.get("ok"):
@@ -1057,7 +1138,14 @@ class AccountRuntime:
                 self.log("INFO", "账号登录态保活已在运行")
         else:
             self.log("INFO", "已自动启动账号登录态保活（对齐 CLI）")
-        return {"ok": True, "instance_id": instance_id, "interval": interval, "account_keepalive": aka_res}
+        return {
+            "ok": True,
+            "instance_id": instance_id,
+            "interval": interval,
+            "mode": mode,
+            "origin_company_code": origin_u,
+            "account_keepalive": aka_res,
+        }
 
     def stop_keepalive(self) -> dict:
         # #75fixag: always clear start reentrancy latch on stop

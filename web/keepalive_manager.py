@@ -483,11 +483,20 @@ class KeepaliveManager:
         ticket: str = "",
         interval: int = 300,
         relogin_fn=None,
+        mode: str = "path_b",
     ) -> bool:
-        """启动 Path B 桌面保活线程。已在运行则返回 False。
+        """启动桌面保活线程。已在运行则返回 False。
+
+        #75fixaj mode:
+          - path_b: SPICE HEART + status/uptime oracle (CMSSZTE only)
+          - http:   pure HTTP desktopUptime (H3C / non-CMSSZTE)
 
         ticket 参数保留兼容 WebUI/API 旧签名，Path B 不使用 ticket 明文。
         """
+        mode_n = (mode or "path_b").strip().lower()
+        if mode_n not in ("path_b", "http"):
+            mode_n = "path_b"
+
         # #75fixag/#75fixai: previous soft-stop may still have a dying worker.
         # Do NOT refuse start forever — orphan the old daemon thread after brief join
         # so user can restart immediately (stop already set running=False).
@@ -498,7 +507,7 @@ class KeepaliveManager:
             if old.is_alive():
                 self._log(
                     "WARN",
-                    "上一轮 Path B 线程仍在收尾，已孤儿化并启动新轮次"
+                    "上一轮保活线程仍在收尾，已孤儿化并启动新轮次"
                     "（旧线程见 stop 后将自行退出，不再拒绝启动）",
                 )
                 # drop reference so GC/daemon exit; stop flag stays set until we clear below
@@ -513,6 +522,7 @@ class KeepaliveManager:
             self._running = True
             self._instance_id = instance_id
             self._interval = interval
+            self._mode = mode_n
             self._rounds = 0
             self._last_uptime = ""
             self._last_error = ""
@@ -522,16 +532,19 @@ class KeepaliveManager:
             self._started_at = datetime.now()
             self._stop_event = stop_ev
 
+        target = self._run_http if mode_n == "http" else self._run
+        thr_name = "keepalive-http" if mode_n == "http" else "keepalive-pathb"
         self._thread = threading.Thread(
-            target=self._run,
+            target=target,
             args=(http, instance_id, machine_id, ticket, interval, relogin_fn, stop_ev),
             daemon=True,
-            name="keepalive-pathb",
+            name=thr_name,
         )
         self._thread.start()
+        label = "HTTP desktopUptime" if mode_n == "http" else "Path B"
         self._log(
             "INFO",
-            f"Path B 保活已启动: instance={str(instance_id)[:20]}, interval={interval}s",
+            f"{label} 保活已启动: instance={str(instance_id)[:20]}, interval={interval}s mode={mode_n}",
         )
         return True
 
@@ -901,6 +914,105 @@ class KeepaliveManager:
             # #75fixah/#75fixai: abort heart_listen early when WebUI stop requested
             should_stop=ev.is_set,
         )
+
+    def _run_http(
+        self,
+        http: EcloudHttpUtil,
+        instance_id: str,
+        machine_id: str,
+        ticket: str,
+        interval: int,
+        relogin_fn,
+        stop_ev: threading.Event | None = None,
+    ):
+        """#75fixaj: pure HTTP desktopUptime loop for non-CMSSZTE (H3C etc.)."""
+        if stop_ev is None:
+            stop_ev = self._stop_event
+        try:
+            import desktop_session
+        except Exception as e:
+            self._record_error(f"desktop_session import failed: {e}")
+            with self._lock:
+                if self._stop_event is stop_ev:
+                    self._running = False
+            return
+
+        iid = instance_id or ""
+        mid = machine_id or ""
+        self._log(
+            "INFO",
+            f"HTTP 保活就绪: instance={iid[:20]}, interval={interval}s (non-CMSSZTE)",
+        )
+
+        while not stop_ev.is_set():
+            with self._lock:
+                self._rounds += 1
+                current_round = self._rounds
+            try:
+                session = desktop_session.DesktopSession(
+                    http, iid, mid, ticket=ticket or ""
+                )
+                ok = session.keepalive_once()
+                if ok:
+                    uptime = session.last_uptime or ""
+                    self._record_success(uptime, heart_ok=None)
+                    self._log(
+                        "INFO",
+                        f"[{current_round}] HTTP 保活成功 uptime={uptime or '-'}",
+                    )
+                else:
+                    err = session.last_error or "desktopUptime 失败"
+                    # token expired → relogin
+                    if session.last_error_token_expired and relogin_fn:
+                        try:
+                            tok = relogin_fn()
+                            if isinstance(tok, str) and tok.strip():
+                                http.set_token(tok.strip())
+                                self._log("INFO", f"[{current_round}] 已重新登录，重试 HTTP 保活")
+                                session2 = desktop_session.DesktopSession(
+                                    http, iid, mid, ticket=ticket or ""
+                                )
+                                ok2 = session2.keepalive_once()
+                                if ok2:
+                                    uptime = session2.last_uptime or ""
+                                    self._record_success(uptime, heart_ok=None)
+                                    self._log(
+                                        "INFO",
+                                        f"[{current_round}] HTTP 保活成功(重登后) uptime={uptime or '-'}",
+                                    )
+                                else:
+                                    msg = _safe_public_err(
+                                        session2.last_error or "重登后仍失败"
+                                    )
+                                    self._record_error(msg)
+                                    self._log(
+                                        "WARN",
+                                        f"[{current_round}] 重登后仍失败: {msg}",
+                                    )
+                            else:
+                                self._record_error("重新登录失败")
+                                self._log("ERROR", "重新登录失败")
+                        except Exception as retry_ex:
+                            msg = _safe_public_err(str(retry_ex))
+                            self._record_error(msg)
+                            self._log("WARN", f"[{current_round}] 重登异常: {msg}")
+                    else:
+                        msg = _safe_public_err(err)
+                        self._record_error(msg)
+                        self._log("WARN", f"[{current_round}] HTTP 保活失败: {msg}")
+            except Exception as e:
+                msg = _safe_public_err(str(e))
+                self._record_error(msg)
+                self._log("ERROR", f"[{current_round}] HTTP 保活异常: {msg}")
+
+            for _ in range(max(1, int(interval))):
+                if stop_ev.is_set():
+                    break
+                time.sleep(1)
+
+        with self._lock:
+            if self._stop_event is stop_ev:
+                self._running = False
 
     def _run(
         self,

@@ -150,7 +150,13 @@ class EcloudHttpUtil:
         })
 
     def set_token(self, token: str | None) -> None:
-        self.access_token = token
+        # #75fixaj: refuse bool/True/empty — WebUI relogin used to return True
+        # and oracle/AKA did `if tok: http.set_token(tok)` → access_token=True → uptime=-
+        if isinstance(token, str) and token.strip():
+            self.access_token = token.strip()
+        else:
+            # Keep existing token on bad input (do NOT wipe / do NOT store True)
+            return
 
     def clear_token(self) -> None:
         self.access_token = None

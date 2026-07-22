@@ -6,8 +6,10 @@
 [![GitHub stars](https://img.shields.io/github/stars/1936-zero/ecloud-cmsszte-alive?style=social)](https://github.com/1936-zero/ecloud-cmsszte-alive)
 
 > 关掉官方客户端后，云电脑容易被回收。本工具在你自己的电脑上登录账号、选桌面，用**协议心跳**把桌面顶住。  
-> 仅适用于 **公众移动云电脑（ecloud）CMSSZTE 桌面**（中兴 / CMSS uSmartView 栈，列表里 `originCompanyCode=CMSSZTE`）。  
-> **不支持** H3C 桌面、VMware Tools（vmtool）以及爱家账号；用错厂商会连不上或保活无效。
+> 适用于 **公众移动云电脑（ecloud）**：  
+> - **CMSSZTE / ZTE / ZTEECLOUD**（中兴 / CMSS uSmartView）→ **Path B**（SPICE + oracle 心跳）  
+> - **H3C 及其它非 CMSSZTE** → **HTTP** 桌面保活链路  
+> **不支持** VMware Tools（vmtool）以及爱家账号。
 
 你不需要会写代码。大多数情况下：**复制一段命令 → 按提示登录 → 选桌面 → 开始保活**。
 
@@ -104,8 +106,17 @@ python3 main.py desktop-keepalive
 
 1. `login`：账号、密码；若要短信，再输入**短信验证码**（不是用短信当密码）
 2. `list-desktops` / `select-desktop`：看有几台、选一台（回车默认 0）
-3. `setup`：需要时开机 + 准备连接
-4. `desktop-keepalive`：前台保活；停止按 `Ctrl+C`
+3. `setup`：需要时开机 + 准备连接（可选手动；见下）
+4. `desktop-keepalive` / `keepalive`：前台保活（**默认内置先开机再分流**，一般不必再单独 `setup`）；停止按 `Ctrl+C`
+
+**保活怎么走（CLI / WebUI 同序）：**
+
+```text
+login → 选桌面 → 开机(power first) → 按 origin 分流
+  · CMSSZTE / ZTE / ZTEECLOUD → Path B
+  · H3C / 其它非空 origin      → HTTP
+  · --legacy-http 强制 HTTP；--force-path-b 强制 Path B；--no-power 跳过开机
+```
 
 Linux / macOS 也可用薄壳（与后两步等价）：
 
@@ -198,7 +209,16 @@ git pull
 docker compose up -d --build
 ```
 
-默认映射 **本机 8081 → 容器 8080**。若 8081 被占用，可改 `docker-compose.yml` 里 `ports` 左侧，例如 `"9081:8080"`。
+**方式 C 注意（与旧 README 不同）：**
+
+- 当前 `docker-compose.yml` 使用 **`network_mode: host`**（CAG mint 在 bridge NAT 下易超时），**没有** `ports: 8081:8080` 映射。
+- 容器进程直接监听 **本机 `8081`**（`web --host 0.0.0.0 --port 8081`），浏览器仍打开 `http://127.0.0.1:8081`。
+- 若 8081 被占用：改 compose 里 `command` 的 `--port`，或先释放端口。
+- 挂载了宿主机客户端路径  
+  `/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini`  
+  （Path B 解密连接串需要）。**没有装官方客户端 / 无此文件时**，compose 可能起不来或 Path B 失败——可暂时注释该 volume，仅用 HTTP 桌面；或先装客户端再起容器。
+- 容器 `user: "1000:1000"`：请保证 `./data` 对该 uid 可写（`mkdir -p data && sudo chown -R 1000:1000 data`）。
+- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，常见是 data 权限、缺 installinfo、或 8081 冲突；**不要**再按「改 ports 8081:8080」排障（host 网络下无效）。
 
 ---
 
@@ -206,8 +226,8 @@ docker compose up -d --build
 
 | 你想做什么 | 命令行（方式 A） | 网页（方式 B / C） |
 |------------|------------------|---------------------|
-| 只保一台 | `select-desktop` → `setup` → `desktop-keepalive` | 一张卡选好桌面后启动 |
-| 换成另一台 | 再 `select-desktop`，再 `setup` / 保活 | 卡片里改选桌面 |
+| 只保一台 | `select-desktop` → `desktop-keepalive`（内置开机+分流；可选 `setup`） | 一张卡选好桌面后启动 |
+| 换成另一台 | 再 `select-desktop`，再保活 | 卡片里改选桌面 |
 | 两台同时保 | **两个终端** + 两份配置（见下） | **多张账号卡**（推荐） |
 | 多个账号 | 每个账号一份配置 + 独立终端 | 每账号一张卡 |
 
@@ -217,8 +237,7 @@ docker compose up -d --build
 export CLOUD_PC_CONFIG_FILE="$PWD/cloud_pc_desk2.json"
 python3 main.py login
 python3 main.py select-desktop
-python3 main.py setup
-python3 main.py desktop-keepalive
+python3 main.py desktop-keepalive   # 或 keepalive；内置 power-first
 ```
 
 Windows PowerShell：
@@ -227,7 +246,6 @@ Windows PowerShell：
 $env:CLOUD_PC_CONFIG_FILE = "$PWD\cloud_pc_desk2.json"
 python3 main.py login
 python3 main.py select-desktop
-python3 main.py setup
 python3 main.py desktop-keepalive
 ```
 
@@ -240,9 +258,10 @@ python3 main.py desktop-keepalive
 | `python3 main.py login` | 登录（含短信） |
 | `python3 main.py list-desktops` | 列出云电脑 |
 | `python3 main.py select-desktop` | 交互选择要保活的桌面 |
-| `python3 main.py setup` | 开机（如需）+ 准备连接 |
-| `python3 main.py desktop-keepalive` | 前台保活 |
-| `python3 main.py web` | 本机网页控制台（默认 `0.0.0.0:8080`） |
+| `python3 main.py setup` | 开机（如需）+ 准备连接（可选；保活命令已内置 power-first） |
+| `python3 main.py desktop-keepalive` | 前台保活：先开机 → 按 origin 走 Path B 或 HTTP |
+| `python3 main.py keepalive` | 同上系入口（默认 Path B + oracle；可用 `--legacy-http`） |
+| `python3 main.py web` | 本机网页控制台（默认 `0.0.0.0:8080`；Docker 方式 C 用 8081） |
 | `./bin/public-spice-keepalive setup` | 同 `setup`（Linux / macOS） |
 | `./bin/public-spice-keepalive run` | 同 `desktop-keepalive` |
 
@@ -284,8 +303,11 @@ systemctl --user status ecloud-spice-keepalive.service
 ## 保活在干什么（白话）
 
 1. 登录拿 token  
-2. 选桌面 → 需要时开机 → 准备连接  
-3. 按固定间隔发协议心跳，降低「空闲被回收」的概率  
+2. 选桌面 → **先开机**（`operate=available`，已开机则跳过）  
+3. 看桌面 `originCompanyCode` 分流：  
+   - CMSSZTE / ZTE / ZTEECLOUD → Path B 协议心跳 + 状态核对  
+   - H3C 等 → HTTP 桌面保活  
+4. 按固定间隔重复，降低「空闲被回收」的概率  
 
 不能替代官方客户端里的远程桌面操作；只是尽量让桌面别被系统收回。
 
