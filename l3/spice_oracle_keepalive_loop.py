@@ -191,9 +191,34 @@ def _plain_age_s(plain: Path) -> Optional[float]:
         return None
 
 
+def _user_aborted(spice: Dict[str, Any], spice_err: Optional[str] = None) -> bool:
+    """#75fixai: WebUI stop / should_stop — do NOT remint or mid-session reconnect."""
+    err = str(spice.get("error") or spice_err or "").lower()
+    if "aborted" in err or "should_stop" in err:
+        return True
+    stages = spice.get("stages") or spice.get("stages_focus") or []
+    if isinstance(stages, list):
+        for s in stages:
+            if isinstance(s, dict) and s.get("name") == "heart_listen_aborted":
+                return True
+    return False
+
+
+def _stop_requested(should_stop: Optional[Callable[[], bool]]) -> bool:
+    if should_stop is None:
+        return False
+    try:
+        return bool(should_stop())
+    except Exception:
+        return False
+
+
 def _is_mid_session_drop(spice: Dict[str, Any], spice_err: Optional[str] = None) -> bool:
     """auth/tls already ok but heart/redq dropped — remint won't help; reconnect may."""
     if bool(spice.get("ok_heart_keepalive")):
+        return False
+    # #75fixai: abort after handshake looks like drop — must not reconnect
+    if _user_aborted(spice, spice_err):
         return False
     if spice.get("ok_auth220") is True:
         return True
@@ -202,7 +227,7 @@ def _is_mid_session_drop(spice: Dict[str, Any], spice_err: Optional[str] = None)
         if not bool(spice.get("ok_redq_s2c")) or not bool(spice.get("ok_heart_keepalive")):
             # only if not a pre-auth class error
             err = str(spice.get("error") or spice_err or "").lower()
-            if any(h in err for h in ("auth220", "connectstr", "ticket", "handshake")):
+            if any(h in err for h in ("auth220", "connectstr", "ticket", "handshake", "aborted")):
                 return False
             return True
     return False
@@ -215,6 +240,9 @@ def _need_remint(spice: Dict[str, Any], spice_err: Optional[str] = None) -> bool
     not a pure mid-session heart drop after ok_auth220.
     """
     if bool(spice.get("ok_heart_keepalive")):
+        return False
+    # #75fixai: user stop is not a freeze lifecycle
+    if _user_aborted(spice, spice_err):
         return False
     # auth already passed → heart/redq drop is mid-session; remint won't help
     if spice.get("ok_auth220") is True:
@@ -447,6 +475,10 @@ def run_spice_oracle_keepalive_loop(
 
     try:
         while max_rounds is None or rounds < max_rounds:
+            # #75fixai: honor WebUI stop before any remint / path_B / reconnect
+            if _stop_requested(should_stop):
+                log.info("[%d] should_stop before round — exit oracle loop", rounds)
+                break
             rounds += 1
             t0 = time.time()
             row: Dict[str, Any] = {
@@ -782,6 +814,11 @@ def run_spice_oracle_keepalive_loop(
             with summary_path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+            # #75fixai: user abort → leave loop immediately (no remint/mid/sleep)
+            if _user_aborted(spice, spice_err) or _stop_requested(should_stop):
+                log.info("[%d] user abort after path_B — exit oracle loop", rounds)
+                break
+
             if stop_on_fatal and not heart_ok and not redq_ok:
                 log.error("[%d] fatal SPICE fail stop_on_fatal=1", rounds)
                 break
@@ -792,7 +829,15 @@ def run_spice_oracle_keepalive_loop(
                 wait = max(0.0, float(interval) - slept)
                 if wait > 0:
                     log.info("[%d] sleep %.1fs → next round", rounds, wait)
-                    time.sleep(wait)
+                    # #75fixai: interruptible sleep so WebUI stop does not wait full interval
+                    end = time.time() + wait
+                    while time.time() < end:
+                        if _stop_requested(should_stop):
+                            log.info("[%d] should_stop during sleep — exit", rounds)
+                            break
+                        time.sleep(min(0.5, end - time.time()))
+                    if _stop_requested(should_stop):
+                        break
     except KeyboardInterrupt:
         log.info("interrupted by user after %d rounds", rounds)
 

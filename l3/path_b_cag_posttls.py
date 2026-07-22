@@ -433,11 +433,12 @@ def path_b_connect(
                             "ok": sent_extra > 0,
                         }
                     )
-                # #75fixah: poll should_stop so WebUI stop need not wait full heart_listen
+                # #75fixah/#75fixai: poll should_stop; abort must not look like mid-session drop
                 while time.time() - t0 < float(heart_listen_s):
                     if should_stop is not None:
                         try:
                             if bool(should_stop()):
+                                res.error = "aborted:should_stop"
                                 res.stages.append(
                                     {
                                         "name": "heart_listen_aborted",
@@ -447,6 +448,11 @@ def path_b_connect(
                                         "production_claim": False,
                                     }
                                 )
+                                # force-close so recvall/handshake cannot hang the worker
+                                try:
+                                    tls.close()
+                                except Exception:
+                                    pass
                                 break
                         except Exception:
                             pass

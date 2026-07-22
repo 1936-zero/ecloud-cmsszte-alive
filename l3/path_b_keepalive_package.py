@@ -212,12 +212,16 @@ def run_path_b_keepalive(
                     "session_nudge",
                     "session_nudge_err",
                     "heart_listen",
+                    "heart_listen_aborted",  # #75fixai stop path
                     "redq_s2c",
                     "ticket",
                 )
                 or "nudge" in str(s.get("name", ""))
+                or "abort" in str(s.get("name", ""))
             )
         ],
+        # #75fixai: full stages so oracle can detect user abort without remint/reconnect
+        "stages": list(getattr(r, "stages", []) or []),
         "policy": PackagePolicy().as_public_dict(),
     }
 

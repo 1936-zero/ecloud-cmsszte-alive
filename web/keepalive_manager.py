@@ -488,15 +488,25 @@ class KeepaliveManager:
 
         ticket 参数保留兼容 WebUI/API 旧签名，Path B 不使用 ticket 明文。
         """
-        # #75fixag: previous soft-stop may still have a dying worker
+        # #75fixag/#75fixai: previous soft-stop may still have a dying worker.
+        # Do NOT refuse start forever — orphan the old daemon thread after brief join
+        # so user can restart immediately (stop already set running=False).
         old = self._thread
         if old is not None and old.is_alive():
             self._stop_event.set()
-            old.join(timeout=5.0)
+            old.join(timeout=2.0)
             if old.is_alive():
-                self._log("WARN", "上一轮 Path B 线程尚未退出，拒绝重复启动")
-                return False
+                self._log(
+                    "WARN",
+                    "上一轮 Path B 线程仍在收尾，已孤儿化并启动新轮次"
+                    "（旧线程见 stop 后将自行退出，不再拒绝启动）",
+                )
+                # drop reference so GC/daemon exit; stop flag stays set until we clear below
+                self._thread = None
 
+        # #75fixai: capture a per-worker Event so an orphaned old thread cannot
+        # re-bind to a fresh (cleared) self._stop_event and resurrect.
+        stop_ev = threading.Event()
         with self._lock:
             if self._running:
                 return False
@@ -510,11 +520,11 @@ class KeepaliveManager:
             self._consecutive_errors = 0
             self._last_heart_ok = None
             self._started_at = datetime.now()
-            self._stop_event.clear()
+            self._stop_event = stop_ev
 
         self._thread = threading.Thread(
             target=self._run,
-            args=(http, instance_id, machine_id, ticket, interval, relogin_fn),
+            args=(http, instance_id, machine_id, ticket, interval, relogin_fn, stop_ev),
             daemon=True,
             name="keepalive-pathb",
         )
@@ -856,6 +866,7 @@ class KeepaliveManager:
         pre: Path,
         post: Path,
         host: str,
+        stop_ev: threading.Event | None = None,
     ) -> dict[str, Any]:
         from l3.spice_oracle_keepalive_loop import run_spice_oracle_keepalive_loop
 
@@ -867,6 +878,9 @@ class KeepaliveManager:
             out_dir = self._out_dir_override
         else:
             out_dir = _resolve_out_dir()
+        # #75fixai: bind should_stop to THIS worker's Event, not self._stop_event
+        # (start may replace self._stop_event for a new worker while we orphan).
+        ev = stop_ev if stop_ev is not None else self._stop_event
         return run_spice_oracle_keepalive_loop(
             http=http,
             instance_id=instance_id,
@@ -884,8 +898,8 @@ class KeepaliveManager:
             auto_remint=True,
             mid_session_reconnect=True,
             out_dir=out_dir,
-            # #75fixah: abort heart_listen early when WebUI stop requested
-            should_stop=self._stop_event.is_set,
+            # #75fixah/#75fixai: abort heart_listen early when WebUI stop requested
+            should_stop=ev.is_set,
         )
 
     def _run(
@@ -896,9 +910,14 @@ class KeepaliveManager:
         ticket: str,
         interval: int,
         relogin_fn,
+        stop_ev: threading.Event | None = None,
     ):
         """Path B 保活主循环：每轮 oracle max_rounds=1，然后 sleep interval。"""
         _ = ticket  # API 兼容；Path B 不消费 ticket
+        # #75fixai: pin this worker to the Event captured at start(); never re-read
+        # self._stop_event (would pick up a fresh Event after orphan restart).
+        if stop_ev is None:
+            stop_ev = self._stop_event
         plain = self._plain_path()
         pre, post = self._template_dirs()
 
@@ -911,8 +930,10 @@ class KeepaliveManager:
 
         if not self._ensure_plain(http, iid, mid, plain):
             self._record_error("会话凭证准备失败（请先 setup / 检查桌面是否可开机）")
+            # #75fixai: only clear running if this worker is still the active one
             with self._lock:
-                self._running = False
+                if self._stop_event is stop_ev:
+                    self._running = False
             return
 
         self._log(
@@ -921,7 +942,7 @@ class KeepaliveManager:
             f"pre={pre.name if pre else '?'}, heart_listen={self._heart_listen}s",
         )
 
-        while not self._stop_event.is_set():
+        while not stop_ev.is_set():
             with self._lock:
                 self._rounds += 1
                 current_round = self._rounds
@@ -940,7 +961,7 @@ class KeepaliveManager:
                         self._log("ERROR", f"[{current_round}] 会话凭证缺失且重签失败")
                         # still wait interval before next try
                         for _ in range(max(1, int(interval))):
-                            if self._stop_event.is_set():
+                            if stop_ev.is_set():
                                 break
                             time.sleep(1)
                         continue
@@ -955,6 +976,7 @@ class KeepaliveManager:
                     pre=pre,
                     post=post,
                     host=host,
+                    stop_ev=stop_ev,
                 )
                 ok_heart = int(finished.get("ok_heart_rounds") or 0)
                 ok_redq = int(finished.get("ok_redq_rounds") or 0)
@@ -1000,12 +1022,14 @@ class KeepaliveManager:
                 self._log("ERROR", f"[{current_round}] Path B 异常: {msg}")
 
             for _ in range(max(1, int(interval))):
-                if self._stop_event.is_set():
+                if stop_ev.is_set():
                     break
                 time.sleep(1)
 
+        # #75fixai: orphaned old worker must NOT clobber a newer start()'s state
         with self._lock:
-            self._running = False
+            if self._stop_event is stop_ev:
+                self._running = False
 
 
 def _token_maybe_expired(err: EcloudError) -> bool:
