@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众移动云电脑保活</title>
 <link rel="icon" type="image/png" href="/static/logo.png?v=logo20260721c">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=fixz20260722c">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=fixab20260722c">
 <!-- #75fixr: 穿透/内嵌浏览器常缓存旧 style.css；关键底钮+toast 内联，HTML 一更即生效 -->
 <style id="fixr-mobile-config-actions">
 /* toast 气泡（对齐爱家：底中浮层，不依赖 style.css 缓存） */
@@ -90,7 +90,7 @@
 <div id="access-gate" class="access-gate hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="gate-title">
   <div class="access-gate-card">
     <div class="access-gate-brand">
-      <img class="access-gate-logo brand-mark" src="/static/logo.png?v=logo20260721c" width="48" height="48" alt="" />
+      <img class="access-gate-logo brand-mark" src="/static/logo.png?v=logo20260721c" width="40" height="40" alt="" />
       <div>
         <h1 id="gate-title">设置访问密钥</h1>
         <p class="access-gate-sub" id="gate-sub">首次部署可选：保护控制台，之后可在顶栏修改。</p>
@@ -101,7 +101,7 @@
         <span>访问密钥</span>
         <div class="field-row">
           <input type="password" id="gate-setup-input" autocomplete="new-password" placeholder="至少 4 位" />
-          <button type="button" class="btn btn-ghost btn-sm" id="gate-setup-show" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="gate-setup-show" aria-pressed="false" title="显示或隐藏密钥">显示密钥</button>
         </div>
       </label>
       <p class="access-gate-err" id="gate-setup-err" aria-live="polite"></p>
@@ -119,7 +119,7 @@
         <span>访问密钥</span>
         <div class="field-row">
           <input type="password" id="gate-login-input" autocomplete="current-password" placeholder="输入访问密钥" />
-          <button type="button" class="btn btn-ghost btn-sm" id="gate-login-show" aria-pressed="false" title="显示或隐藏密钥">显示</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="gate-login-show" aria-pressed="false" title="显示或隐藏密钥">显示密钥</button>
         </div>
       </label>
       <p class="access-gate-err" id="gate-login-err" role="alert" aria-live="polite"></p>
@@ -1851,8 +1851,9 @@
         setupInput.value = t;
       }
       if (setupShow) {
-        setupShow.textContent = "隐藏";
+        setupShow.textContent = "隐藏密钥";
         setupShow.setAttribute("aria-pressed", "true");
+        setupShow.setAttribute("aria-label", "隐藏密钥");
       }
       setGateErr("", "setup");
     };
@@ -1860,15 +1861,18 @@
     if (setupShow && setupInput) setupShow.onclick = function () {
       var show = setupInput.type === "password";
       setupInput.type = show ? "text" : "password";
-      setupShow.textContent = show ? "隐藏" : "显示";
+      // 门控与爱家一致：长文案「显示密钥/隐藏密钥」（token-modal 仍用短文案）
+      setupShow.textContent = show ? "隐藏密钥" : "显示密钥";
       setupShow.setAttribute("aria-pressed", show ? "true" : "false");
+      setupShow.setAttribute("aria-label", show ? "隐藏密钥" : "显示密钥");
     };
     if (loginOk) loginOk.onclick = submitGateLogin;
     if (loginShow && loginInput) loginShow.onclick = function () {
       var show = loginInput.type === "password";
       loginInput.type = show ? "text" : "password";
-      loginShow.textContent = show ? "隐藏" : "显示";
+      loginShow.textContent = show ? "隐藏密钥" : "显示密钥";
       loginShow.setAttribute("aria-pressed", show ? "true" : "false");
+      loginShow.setAttribute("aria-label", show ? "隐藏密钥" : "显示密钥");
     };
     if (setupInput) setupInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter") submitGateSetup();

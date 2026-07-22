@@ -963,7 +963,7 @@ body.log-modal-open {
 }
 
 
-/* ========== #75 access gate (layout parity with 28080; ecloud copy) ========== */
+/* ========== #75fixab access gate (parity aijia gate12 cool white Lens SaaS) ========== */
 #access-gate.access-gate {
   position: fixed;
   inset: 0;
@@ -972,8 +972,9 @@ body.log-modal-open {
   align-items: center;
   justify-content: center;
   padding: clamp(12px, 3vw, 28px) clamp(12px, 3vw, 20px);
+  /* cool white + purple wash — match 爱家, not 公众棕金主主题 */
   background:
-    radial-gradient(900px 480px at 12% -6%, rgba(201, 146, 46, 0.08), transparent 55%),
+    radial-gradient(900px 480px at 12% -6%, rgba(98, 95, 255, 0.10), transparent 55%),
     radial-gradient(700px 380px at 95% 108%, rgba(141, 84, 255, 0.05), transparent 50%),
     var(--bg-page, #fafafa);
   box-sizing: border-box;
@@ -1011,7 +1012,7 @@ body.log-modal-open {
 #access-gate .access-gate-brand h1,
 #access-gate #gate-title {
   margin: 0;
-  font-size: 14px;
+  font-size: clamp(1.05rem, 2.6vw, 1.2rem);
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--text, #18181b);
@@ -1020,7 +1021,7 @@ body.log-modal-open {
 #access-gate .access-gate-sub,
 #access-gate #gate-sub {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: 0.86rem;
   color: var(--text-dim, #79716b);
   line-height: 1.45;
 }
@@ -1034,18 +1035,18 @@ body.log-modal-open {
 }
 #access-gate .access-gate-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.88rem;
   line-height: 1.5;
   color: var(--text-dim, #79716b);
 }
 #access-gate .access-gate-note {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.45;
   color: var(--text-soft, #a8a29e);
 }
 #access-gate .access-gate-note code {
-  font-size: 12px;
+  font-size: 0.72rem;
   background: var(--bg-soft, #f4f4f5);
   padding: 1px 5px;
   border-radius: 4px;
@@ -1055,7 +1056,7 @@ body.log-modal-open {
 #access-gate .access-gate-err {
   min-height: 0;
   margin: 0;
-  font-size: 12px;
+  font-size: 0.82rem;
   color: var(--danger, #e40014);
   line-height: 1.4;
 }
@@ -1069,12 +1070,13 @@ body.log-modal-open {
   margin: 0;
 }
 #access-gate .field > span {
-  font-size: 12px;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--text-dim, #79716b);
 }
 #access-gate .field-row {
   display: flex;
+  flex-wrap: nowrap; /* beat @media .field-row wrap; show stays right of input like aijia */
   align-items: stretch;
   gap: 8px;
   width: 100%;
@@ -1082,32 +1084,32 @@ body.log-modal-open {
 #access-gate .field-row input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 36px;
-  min-height: 36px;
+  height: 40px;
+  min-height: 40px;
   padding: 0 12px;
   border: 1px solid var(--border, #e7e5e4);
   border-radius: 10px;
-  background: var(--bg-elev);
+  background: #fff;
   color: var(--text, #18181b);
-  font-size: 14px;
+  font-size: 0.95rem;
   box-sizing: border-box;
 }
 #access-gate .field-row input:focus {
   outline: none;
-  border-color: var(--accent, #9a6324);
-  box-shadow: 0 0 0 3px var(--accent-ring, rgba(154, 99, 36, 0.22));
+  border-color: #625fff;
+  box-shadow: 0 0 0 3px rgba(98, 95, 255, 0.22);
 }
 #access-gate .field-row .btn-sm,
 #access-gate .field-row #gate-setup-show,
 #access-gate .field-row #gate-login-show {
   flex: 0 0 auto;
-  height: 36px;
-  min-height: 36px;
-  min-width: 88px;
+  height: 40px;
+  min-height: 40px;
+  min-width: 96px;
   padding: 0 12px;
   white-space: nowrap;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 0.82rem;
   box-sizing: border-box;
 }
 /* actions: setup = row of 2 ghosts + primary full width */
@@ -1126,8 +1128,8 @@ body.log-modal-open {
 #access-gate .access-gate-actions-row .btn {
   flex: 1 1 0;
   min-width: 0;
-  height: 36px;
-  min-height: 36px;
+  height: 40px;
+  min-height: 40px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1137,11 +1139,23 @@ body.log-modal-open {
 #access-gate .access-gate-actions #gate-setup-ok,
 #access-gate .access-gate-actions #gate-login-ok {
   width: 100%;
-  height: 36px;
-  min-height: 36px;
+  height: 42px;
+  min-height: 42px;
   flex: none;
   font-weight: 600;
   box-sizing: border-box;
+  /* #75fixab: gate primary = aijia #625fff; do NOT change global brand brown */
+  background: #625fff;
+  border-color: #625fff;
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(98, 95, 255, 0.25);
+}
+#access-gate .access-gate-actions > .btn-primary:hover:not(:disabled),
+#access-gate .access-gate-actions #gate-setup-ok:hover:not(:disabled),
+#access-gate .access-gate-actions #gate-login-ok:hover:not(:disabled) {
+  filter: brightness(1.04);
+  background: #514ee6;
+  border-color: #514ee6;
 }
 /* login panel: single primary full width */
 #access-gate .access-gate-actions-login {
@@ -1419,6 +1433,17 @@ body.log-modal-open {
   #access-gate .access-gate-card {
     width: min(100%, 440px);
     padding: 16px 14px 14px;
+  }
+  /* keep password + 显示密钥 on one row (aijia: wrap only ≤380) */
+  #access-gate .field-row {
+    flex-wrap: nowrap;
+  }
+  #access-gate .field-row .btn-sm,
+  #access-gate .field-row #gate-setup-show,
+  #access-gate .field-row #gate-login-show {
+    width: auto;
+    min-width: 88px;
+    flex: 0 0 auto;
   }
   #access-gate .access-gate-actions-row {
     flex-direction: column;
