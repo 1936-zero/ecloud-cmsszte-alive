@@ -349,8 +349,12 @@ def run_spice_oracle_keepalive_loop(
     remint_timeout_s: float = 20.0,
     plain_ttl_s: float = 0.0,
     mid_session_reconnect: bool = True,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
     """Login-state HTTP + SPICE HEART + status/uptime oracle loop.
+
+    should_stop: optional callback; when True mid heart_listen, abort early
+    (#75fixah WebUI stop without waiting full heart_listen).
 
     auto_remint (default True): on auth220/handshake fail, mint once and
     retry path_B in the same round (frozen plain lifecycle after power-on).
@@ -527,6 +531,7 @@ def run_spice_oracle_keepalive_loop(
                     session_nudge=session_nudge,
                     agent_hb_every=float(agent_hb_every),
                     out=None,
+                    should_stop=should_stop,
                 )
             except Exception as e:  # noqa: BLE001
                 spice_err = f"{type(e).__name__}:{e}"
@@ -583,6 +588,7 @@ def run_spice_oracle_keepalive_loop(
                             session_nudge=session_nudge,
                             agent_hb_every=float(agent_hb_every),
                             out=None,
+                            should_stop=should_stop,
                         )
                         row["remint"]["retry"] = True
                     except Exception as e:  # noqa: BLE001
@@ -641,6 +647,7 @@ def run_spice_oracle_keepalive_loop(
                         session_nudge=session_nudge,
                         agent_hb_every=float(agent_hb_every),
                         out=None,
+                        should_stop=should_stop,
                     )
                     mid_meta["retry"] = True
                     mid_meta["ok_heart_after"] = bool(

@@ -884,6 +884,8 @@ class KeepaliveManager:
             auto_remint=True,
             mid_session_reconnect=True,
             out_dir=out_dir,
+            # #75fixah: abort heart_listen early when WebUI stop requested
+            should_stop=self._stop_event.is_set,
         )
 
     def _run(

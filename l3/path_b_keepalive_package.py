@@ -21,7 +21,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 _L3 = Path(__file__).resolve().parent
 if str(_L3) not in sys.path:
@@ -141,8 +141,13 @@ def run_path_b_keepalive(
     post: Path = Path(DEFAULT_POST),
     extra_c2s: Optional[Path] = None,
     out: Optional[Path] = None,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-    """Invoke path_b_connect with stock packaging defaults. Never logs -k/plain."""
+    """Invoke path_b_connect with stock packaging defaults. Never logs -k/plain.
+
+    should_stop: optional callback; when True mid heart_listen, abort early
+    (#75fixah WebUI stop without waiting full heart_listen).
+    """
     import path_b_cag_posttls as pb
 
     if session_nudge is None:
@@ -166,6 +171,7 @@ def run_path_b_keepalive(
         ticket_mode=str(ticket_mode),
         extra_c2s_frames=extra_frames,
         session_nudge=bool(session_nudge),
+        should_stop=should_stop,
     )
 
     # Public summary — no secrets

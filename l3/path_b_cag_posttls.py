@@ -24,7 +24,7 @@ import struct
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 def _sha16(s: str) -> str:
@@ -221,6 +221,7 @@ def path_b_connect(
     ticket_mode: str = "zeros",  # T41 stock Write_if g_malloc0(128); classic RSA HARD_NEG
     extra_c2s_frames: Optional[List[bytes]] = None,
     session_nudge: bool = False,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> PathBResult:
     text = Path(plain_file).read_text()
     flags = parse_connect_plain(text)
@@ -432,7 +433,23 @@ def path_b_connect(
                             "ok": sent_extra > 0,
                         }
                     )
+                # #75fixah: poll should_stop so WebUI stop need not wait full heart_listen
                 while time.time() - t0 < float(heart_listen_s):
+                    if should_stop is not None:
+                        try:
+                            if bool(should_stop()):
+                                res.stages.append(
+                                    {
+                                        "name": "heart_listen_aborted",
+                                        "reason": "should_stop",
+                                        "t": round(time.time() - t0, 2),
+                                        "heart_count": res.heart_count,
+                                        "production_claim": False,
+                                    }
+                                )
+                                break
+                        except Exception:
+                            pass
                     now = time.time()
                     if agent_hb_every and agent_hb_every > 0 and now >= next_agent:
                         hb = build_agent_heartbeat(agent_ser)
