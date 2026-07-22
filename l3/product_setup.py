@@ -30,8 +30,9 @@ DEFAULT_POST = str(_REPO_ROOT / "assets/templates/post")
 # Fallback nest capture if assets missing
 _NEST_PRE = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/pre"
 _NEST_POST = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/post"
-# #75fixw: after operate=available wait before mint (SaaS running ≠ CAG ready)
-DEFAULT_POWER_WAIT_S = float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15)
+# #75fixw/#75fixad: after operate=available wait before mint (SaaS running ≠ CAG ready)
+# Cold boot often needs >15s; default 60. Override with CLOUD_PC_POWER_WAIT.
+DEFAULT_POWER_WAIT_S = float(os.environ.get("CLOUD_PC_POWER_WAIT", "60") or 60)
 # mint 501/no_connectStr recovery: force power + wait + remint once (CLI/WebUI shared)
 DEFAULT_MINT_POWER_RETRY = True
 

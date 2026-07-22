@@ -93,6 +93,64 @@ def _preflight_uptime(http: EcloudHttpUtil, instance_id: str) -> str:
     return desktop_session.DesktopSession(http, instance_id).report_uptime()
 
 
+def _power_wait_s() -> float:
+    """Default cold-boot wait; CLOUD_PC_POWER_WAIT overrides (#75fixad: 60)."""
+    return float(os.environ.get("CLOUD_PC_POWER_WAIT", "60") or 60)
+
+
+def _power_ready_wait_s() -> float:
+    """Extra uptime poll after operate; SaaS onAvailable ≠ uptime ready."""
+    return float(os.environ.get("CLOUD_PC_POWER_READY_WAIT", "90") or 90)
+
+
+def _wait_preflight_uptime(
+    http: EcloudHttpUtil,
+    instance_id: str,
+    *,
+    call_with_relogin: Callable[[Callable[[], str]], str],
+    timeout_s: float | None = None,
+    interval_s: float = 5.0,
+    log_fn: Optional[Callable[[str, str], None]] = None,
+) -> str:
+    """Poll desktopUptime until ready or timeout (#75fixad).
+
+    After operate=available SaaS often returns onAvailable while uptime still
+    fails; a single immediate retry loses the whole Path B start.
+    """
+    to = float(timeout_s if timeout_s is not None else _power_ready_wait_s())
+    deadline = time.time() + max(0.0, to)
+    last_err: Optional[BaseException] = None
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return call_with_relogin(lambda: _preflight_uptime(http, instance_id))
+        except EcloudError as e:
+            last_err = e
+            remain = deadline - time.time()
+            if remain <= 0:
+                raise
+            if log_fn and (attempt == 1 or attempt % 3 == 0):
+                log_fn(
+                    "INFO",
+                    f"uptime 未就绪，轮询等待 instance={instance_id[:20]} "
+                    f"attempt={attempt} remain={remain:.0f}s: {e.message}",
+                )
+            time.sleep(min(float(interval_s), max(0.5, remain)))
+        except Exception as ex:
+            last_err = ex
+            remain = deadline - time.time()
+            if remain <= 0:
+                raise
+            time.sleep(min(float(interval_s), max(0.5, remain)))
+    if last_err:
+        raise last_err
+    raise EcloudError({
+        "errorCode": "UPTIME_TIMEOUT",
+        "errorMessage": "desktopUptime 轮询超时",
+    })
+
+
 def _slug(s: str, fallback: str = "acct") -> str:
     s = (s or "").strip().lower()
     s = re.sub(r"[^a-z0-9._-]+", "-", s)
@@ -808,23 +866,27 @@ class AccountRuntime:
                                         machine_name=getattr(d, "machine_name", "") or "",
                                         instance_id=d.instance_id,
                                         save_cfg_fn=lambda c: self._save_cfg_from_dict(c),
-                                        wait_s=float(
-                                            os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15
-                                        ),
+                                        wait_s=_power_wait_s(),
                                         force=True,
                                     )
                                     self._cfg = self._load_cfg() or self._cfg
-                                    if pr.acted or pr.skipped_reason == "already_running":
+                                    # #75fixad: soft already_powering / acted both OK
+                                    if pr.acted or pr.skipped_reason in (
+                                        "already_running",
+                                        "already_powering",
+                                    ):
                                         powered = True
                                         self.log(
                                             "INFO",
                                             f"开机结果 acted={pr.acted} skip={pr.skipped_reason or '-'} "
                                             f"status_after={pr.status_after or '-'}",
                                         )
-                                        uptime = _call_with_relogin(
-                                            lambda d=d: _preflight_uptime(
-                                                http, d.instance_id
-                                            )
+                                        uptime = _wait_preflight_uptime(
+                                            http,
+                                            d.instance_id,
+                                            call_with_relogin=_call_with_relogin,
+                                            timeout_s=_power_ready_wait_s(),
+                                            log_fn=lambda lv, msg: self.log(lv, msg),
                                         )
                             except EcloudError as e2:
                                 label = d.machine_name or d.instance_id[:20] or "未知桌面"
@@ -905,7 +967,7 @@ class AccountRuntime:
                         ),
                         instance_id=instance_id,
                         save_cfg_fn=lambda c: self._save_cfg_from_dict(c),
-                        wait_s=float(os.environ.get("CLOUD_PC_POWER_WAIT", "15") or 15),
+                        wait_s=_power_wait_s(),
                         force=True,
                     )
                     self._cfg = self._load_cfg() or self._cfg
@@ -914,7 +976,14 @@ class AccountRuntime:
                         f"开机结果 acted={pr.acted} skip={pr.skipped_reason or '-'} "
                         f"status_after={pr.status_after or '-'}",
                     )
-                    uptime = _call_with_relogin(lambda: _preflight_uptime(http, instance_id))
+                    # #75fixad: poll uptime — onAvailable 后立刻查必失败
+                    uptime = _wait_preflight_uptime(
+                        http,
+                        instance_id,
+                        call_with_relogin=_call_with_relogin,
+                        timeout_s=_power_ready_wait_s(),
+                        log_fn=lambda lv, msg: self.log(lv, msg),
+                    )
                     self.log(
                         "INFO",
                         f"preflight ok (after power) instance={instance_id[:20]} uptime={uptime}",

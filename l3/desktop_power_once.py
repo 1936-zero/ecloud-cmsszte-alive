@@ -6,12 +6,15 @@ User requirement (#70): Path B keepalive needs a running VM.
 - Subsequent rounds while still running: MUST NOT re-call power-on.
 - #75fixac: if power_on_done but SaaS status is clearly **stopped/关机**,
   re-call operate=available so WebUI/CLI「启保活」能自动拉起已关机桌面.
+- #75fixad: transitional status onAvailable is powering (not running);
+  soft-handle concurrent「开机中暂不能操作」; poll until available/ready.
 
 PIN: public_ecloud · production_claim=false · ban jtydn
 """
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -25,12 +28,14 @@ KEY_POWER_ON_MACHINE = "power_on_machine_id"
 KEY_POWER_ON_RESULT = "power_on_last_status"
 
 # resourceStatus strings observed in public ecloud (best-effort)
+# #75fixad: do NOT put bare "available" as sole match for running without
+# excluding transitional "onAvailable" (substring would false-positive).
 _RUNNING_HINTS = (
     "running",
     "run",
     "online",
     "active",
-    "available",
+    "available",  # matched only after powering-filter (see _status_is_running)
     "开机",
     "运行",
     "使用中",
@@ -45,6 +50,20 @@ _STOPPED_HINTS = (
     "已关机",
     "停止",
 )
+# Transitional after operate=available; desktopUptime not ready yet.
+_POWERING_HINTS = (
+    "onavailable",
+    "powering",
+    "starting",
+    "booting",
+    "startingup",
+    "开机中",
+    "启动中",
+)
+
+# Serialize concurrent force power-on on the same machine (WebUI double-click).
+_power_locks_guard = threading.Lock()
+_power_locks: dict[str, threading.Lock] = {}
 
 
 @dataclass
@@ -72,11 +91,22 @@ class PowerOnceResult:
         }
 
 
+def _status_is_powering(st: str) -> bool:
+    """Transitional power-on (e.g. onAvailable); not mint/uptime ready yet."""
+    s = (st or "").strip().lower()
+    if not s:
+        return False
+    return any(h in s for h in _POWERING_HINTS)
+
+
 def _status_is_running(st: str) -> bool:
     s = (st or "").strip().lower()
     if not s:
         return False
     if any(h in s for h in _STOPPED_HINTS):
+        return False
+    # #75fixad: onAvailable contains "available" but is still powering
+    if _status_is_powering(s):
         return False
     return any(h in s for h in _RUNNING_HINTS)
 
@@ -84,6 +114,29 @@ def _status_is_running(st: str) -> bool:
 def _status_is_stopped(st: str) -> bool:
     s = (st or "").strip().lower()
     return any(h in s for h in _STOPPED_HINTS)
+
+
+def _is_already_powering_err(exc: BaseException) -> bool:
+    """SaaS concurrent operate while already powering."""
+    msg = str(getattr(exc, "message", None) or exc or "")
+    m = msg.lower()
+    return (
+        "开机中" in msg
+        or "暂不能操作" in msg
+        or "powering" in m
+        or "already" in m and "power" in m
+        or "starting" in m and "not" in m
+    )
+
+
+def _machine_lock(mid: str) -> threading.Lock:
+    key = (mid or "").strip() or "_default"
+    with _power_locks_guard:
+        lk = _power_locks.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _power_locks[key] = lk
+        return lk
 
 
 def ensure_powered_once(
@@ -162,6 +215,7 @@ def ensure_powered_once(
 
     # force=True：即便 SaaS 报 running 也再调 operate=available
     # （#75fixw：SaaS running ≠ CAG 可 mint；mint 501 恢复路径依赖此行为）
+    # #75fixad: 例外 — powering 态不重 operate，只轮询等到 available
     if (not force) and status_before and _status_is_running(status_before):
         cfg[KEY_POWER_ON_DONE] = True
         cfg[KEY_POWER_ON_AT] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -179,7 +233,7 @@ def ensure_powered_once(
             notes=notes,
         )
 
-    # #75fixac: power_on_done only blocks when NOT clearly stopped
+    # #75fixac/#75fixad: power_on_done only blocks when NOT stopped/powering
     if (not force) and cfg.get(KEY_POWER_ON_DONE):
         if status_before and _status_is_stopped(status_before):
             notes.append(
@@ -191,6 +245,11 @@ def ensure_powered_once(
                 mid or "-",
             )
             # fall through to operate=available
+        elif status_before and _status_is_powering(status_before):
+            notes.append(
+                "power_on_done + powering → wait ready without re-operate (#75fixad)"
+            )
+            # fall through to wait/poll (skip operate)
         else:
             return PowerOnceResult(
                 acted=False,
@@ -205,6 +264,8 @@ def ensure_powered_once(
 
     if force and status_before and _status_is_running(status_before):
         notes.append("force=True: ignore already_running, re-operate available")
+    if force and status_before and _status_is_powering(status_before):
+        notes.append("force=True but powering: skip re-operate, wait ready (#75fixad)")
     if not mid:
         return PowerOnceResult(
             acted=False,
@@ -218,61 +279,129 @@ def ensure_powered_once(
 
         operate_fn = operate_desktop
 
-    log.info(
-        "power_once: operate=available machine_id=%s name=%s (first-only)",
-        mid,
-        mname or "-",
-    )
-    try:
-        resp = operate_fn(
-            http,
-            machine_id=mid,
-            machine_name=mname or mid,
-            operate="available",
-            resource_pool_uid=pool or "",
-        )
-    except Exception as e:
-        log.error("power_once operate failed: %s", e)
+    # #75fixad: already powering → do not re-call operate (avoids 500 开机中)
+    skip_operate = bool(status_before and _status_is_powering(status_before))
+    if force and status_before and _status_is_powering(status_before):
+        skip_operate = True
+
+    resp = None
+    soft_powering = bool(skip_operate)  # status already powering → treat as soft success
+    if soft_powering:
+        notes.append("skip_operate: status already powering (#75fixad)")
+    lock = _machine_lock(mid)
+    acquired = lock.acquire(blocking=True, timeout=max(1.0, float(wait_s or 0) + 5.0))
+    if not acquired:
+        notes.append("power_lock_busy")
         return PowerOnceResult(
             acted=False,
-            skipped_reason=f"operate_error:{type(e).__name__}",
+            skipped_reason="power_lock_busy",
             status_before=status_before,
             machine_id=mid,
             instance_id=iid,
-            notes=notes + [str(e)[:200]],
+            notes=notes,
         )
-
-    cfg[KEY_POWER_ON_DONE] = True
-    cfg[KEY_POWER_ON_AT] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    cfg[KEY_POWER_ON_MACHINE] = mid
-    cfg[KEY_POWER_ON_RESULT] = "operated_available"
-    if save_cfg_fn:
-        save_cfg_fn(cfg)
-
-    status_after = status_before
-    if wait_s > 0 and poll_status and iid:
-        time.sleep(min(wait_s, 120.0))
-        try:
-            from desktop_list import Desktop, get_desktop_status
-
-            fake = desktop or Desktop(
-                machine_id=mid, instance_id=iid, machine_name=mname or "desktop"
+    try:
+        if not skip_operate:
+            log.info(
+                "power_once: operate=available machine_id=%s name=%s",
+                mid,
+                mname or "-",
             )
-            st2 = get_desktop_status(http, [fake])
-            status_after = str(st2.get(iid) or st2.get(mid) or "")
-            notes.append(f"status_after={status_after or 'empty'}")
-        except Exception as e:
-            notes.append(f"status_after_failed:{type(e).__name__}")
+            try:
+                resp = operate_fn(
+                    http,
+                    machine_id=mid,
+                    machine_name=mname or mid,
+                    operate="available",
+                    resource_pool_uid=pool or "",
+                )
+            except Exception as e:
+                if _is_already_powering_err(e):
+                    soft_powering = True
+                    notes.append(f"soft_already_powering:{str(e)[:120]}")
+                    log.info("power_once soft already_powering: %s", e)
+                else:
+                    log.error("power_once operate failed: %s", e)
+                    return PowerOnceResult(
+                        acted=False,
+                        skipped_reason=f"operate_error:{type(e).__name__}",
+                        status_before=status_before,
+                        machine_id=mid,
+                        instance_id=iid,
+                        notes=notes + [str(e)[:200]],
+                    )
+        else:
+            notes.append("skip_operate_powering")
+            soft_powering = True
 
-    return PowerOnceResult(
-        acted=True,
-        operate_resp=resp,
-        status_before=status_before,
-        status_after=status_after,
-        machine_id=mid,
-        instance_id=iid,
-        notes=notes,
-    )
+        cfg[KEY_POWER_ON_DONE] = True
+        cfg[KEY_POWER_ON_AT] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        cfg[KEY_POWER_ON_MACHINE] = mid
+        cfg[KEY_POWER_ON_RESULT] = (
+            "already_powering"
+            if soft_powering and resp is None
+            else "operated_available"
+        )
+        if save_cfg_fn:
+            save_cfg_fn(cfg)
+
+        status_after = status_before if soft_powering and not resp else ""
+        # #75fixad: poll until running (or timeout), not single sleep
+        deadline = time.time() + max(0.0, float(wait_s or 0.0))
+        if wait_s and wait_s > 0 and not (poll_status and iid):
+            time.sleep(min(float(wait_s), 180.0))
+            notes.append(f"waited_{wait_s}s")
+        poll_interval = 5.0
+        first_poll = True
+        while True:
+            if poll_status and iid:
+                try:
+                    from desktop_list import Desktop, get_desktop_status
+
+                    fake = desktop or Desktop(
+                        machine_id=mid,
+                        instance_id=iid,
+                        machine_name=mname or "desktop",
+                    )
+                    # prefer injected status_fn when present
+                    if status_fn is not None:
+                        st2 = status_fn(http, [fake])  # type: ignore[misc]
+                    else:
+                        st2 = get_desktop_status(http, [fake])
+                    status_after = str(st2.get(iid) or st2.get(mid) or "")
+                    if first_poll:
+                        notes.append(f"status_after={status_after or 'empty'}")
+                        first_poll = False
+                    if status_after and _status_is_running(status_after):
+                        notes.append(f"ready_status={status_after}")
+                        break
+                    if status_after and _status_is_stopped(status_after):
+                        notes.append(f"status_became_stopped={status_after}")
+                        break
+                except Exception as e:
+                    notes.append(f"status_after_failed:{type(e).__name__}")
+            if time.time() >= deadline:
+                if wait_s and wait_s > 0:
+                    notes.append(
+                        f"wait_timeout_{wait_s}s status={status_after or '-'}"
+                    )
+                break
+            time.sleep(min(poll_interval, max(0.5, deadline - time.time())))
+
+        return PowerOnceResult(
+            acted=bool(resp is not None) or soft_powering,
+            skipped_reason=(
+                "already_powering" if soft_powering and resp is None else ""
+            ),
+            operate_resp=resp,
+            status_before=status_before,
+            status_after=status_after,
+            machine_id=mid,
+            instance_id=iid,
+            notes=notes,
+        )
+    finally:
+        lock.release()
 
 
 def selfcheck() -> dict[str, Any]:
@@ -364,6 +493,100 @@ def selfcheck() -> dict[str, Any]:
     assert not r5.acted and r5.skipped_reason == "already_running"
     assert len(calls) == 0
 
+    # #75fixad helpers: onAvailable is powering, not running
+    assert _status_is_powering("onAvailable")
+    assert not _status_is_running("onAvailable")
+    assert _status_is_running("available")
+    assert _status_is_running("running")
+    assert _status_is_stopped("stopped")
+
+    # force + onAvailable → no re-operate, soft already_powering
+    def fake_status_powering(_http, _ds):
+        return {"i1": "onAvailable"}
+
+    calls.clear()
+    cfg_pw: dict = {}
+    r6 = ensure_powered_once(
+        FakeHttp(),
+        cfg_pw,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=True,
+        poll_status=True,
+        status_fn=fake_status_powering,
+        operate_fn=fake_operate,
+        wait_s=0,
+    )
+    assert r6.acted and r6.skipped_reason == "already_powering"
+    assert len(calls) == 0
+    assert any("powering" in (n or "").lower() for n in (r6.notes or []))
+
+    # soft error: operate raises 开机中暂不能操作 → soft success
+    def fake_operate_busy(http, machine_id, machine_name, operate, resource_pool_uid=""):
+        calls.append((machine_id, operate))
+        raise RuntimeError("开机中暂不能操作")
+
+    def fake_status_stopped(_http, _ds):
+        return {"i1": "stopped"}
+
+    calls.clear()
+    cfg_busy: dict = {}
+    r7 = ensure_powered_once(
+        FakeHttp(),
+        cfg_busy,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=True,
+        poll_status=True,
+        status_fn=fake_status_stopped,
+        operate_fn=fake_operate_busy,
+        wait_s=0,
+    )
+    assert r7.acted and r7.skipped_reason == "already_powering"
+    assert len(calls) == 1
+    assert any("soft_already_powering" in n for n in (r7.notes or []))
+
+    # hard error still fails
+    def fake_operate_hard(http, machine_id, machine_name, operate, resource_pool_uid=""):
+        calls.append((machine_id, operate))
+        raise RuntimeError("permission denied")
+
+    calls.clear()
+    cfg_hard: dict = {}
+    r8 = ensure_powered_once(
+        FakeHttp(),
+        cfg_hard,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=True,
+        poll_status=True,
+        status_fn=fake_status_stopped,
+        operate_fn=fake_operate_hard,
+        wait_s=0,
+    )
+    assert not r8.acted and str(r8.skipped_reason or "").startswith("operate_error")
+    assert len(calls) == 1
+
+    # #75fixac: power_on_done + stopped → re-operate
+    calls.clear()
+    cfg_re: dict = {KEY_POWER_ON_DONE: True}
+    r9 = ensure_powered_once(
+        FakeHttp(),
+        cfg_re,
+        machine_id="m1",
+        machine_name="d1",
+        instance_id="i1",
+        force=False,
+        poll_status=True,
+        status_fn=fake_status_stopped,
+        operate_fn=fake_operate,
+        wait_s=0,
+    )
+    assert r9.acted and len(calls) == 1
+
     return {
         "ok": True,
         "calls_after_force": 2,
@@ -372,6 +595,10 @@ def selfcheck() -> dict[str, Any]:
         "force_power_on_done": r3.as_public_dict(),
         "force_already_running": r4.as_public_dict(),
         "skip_already_running": r5.as_public_dict(),
+        "force_onAvailable": r6.as_public_dict(),
+        "soft_powering_err": r7.as_public_dict(),
+        "hard_operate_err": r8.as_public_dict(),
+        "power_on_done_stopped_reop": r9.as_public_dict(),
     }
 
 
