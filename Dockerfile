@@ -11,7 +11,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-# Non-root runtime (compose user 1000:1000). Host bind ./data must be writable by uid 1000.
+# Non-root runtime (compose user 1000:1000).
+# Default compose uses named volume ecloud_data (inherits this ownership on first create).
+# Optional bind ./data (docker-compose.bind.yml) must be writable by uid 1000 on the host.
 RUN mkdir -p /app/data \
     && chown -R 1000:1000 /app/data \
     && chmod 0775 /app/data

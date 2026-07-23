@@ -1,0 +1,10 @@
+# Optional override: bind host ./data for visible config / backup / share with CLI.
+# Usage:
+#   mkdir -p data && sudo chown -R 1000:1000 data   # Linux only if not already writable by uid 1000
+#   docker compose -f docker-compose.yml -f docker-compose.bind.yml up -d --build
+#
+# Prefer default named volume (docker-compose.yml only) unless you need a host directory.
+services:
+  ecloud-keepalive:
+    volumes:
+      - ./data:/app/data

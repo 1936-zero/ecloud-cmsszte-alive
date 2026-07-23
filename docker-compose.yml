@@ -18,7 +18,10 @@ services:
       # product line pins (never jtydn / aijia)
       PIN_PRODUCT_LINE: public_ecloud_9222
     volumes:
-      - ./data:/app/data
+      # Named volume (default): no host chown; avoids Debian bind-mount 500.
+      # Optional bind to ./data for visible files / CLI share:
+      #   docker compose -f docker-compose.yml -f docker-compose.bind.yml up -d
+      - ecloud_data:/app/data
       # installinfo [PublicKey].csap_id required for connectStr mint/decode (Path B).
       # Default: repo stub with product csap_id (same key as official client PublicKey).
       # Override with host official ini if needed:
@@ -27,6 +30,8 @@ services:
       - ${INSTALLINFO_HOST:-./docker/stubs/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
     ports:
       - "8081:8081"
-    # ensure ./data is writable by uid 1000 (mkdir -p data && chown 1000:1000 data)
     restart: unless-stopped
     command: ["web", "--host", "0.0.0.0", "--port", "8081"]
+
+volumes:
+  ecloud_data:

@@ -205,16 +205,12 @@ python3 main.py web --host 127.0.0.1 --port 8081
 ```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
-mkdir -p data
-# 可选：仅当容器写 data 失败 / 页面 HTTP 500 时需要（Debian/Ubuntu 常见）
-# 容器以 uid 1000 运行；data 若属 root 则 chown 一次即可
-sudo chown -R 1000:1000 data
 docker compose up -d --build
 ```
 
 浏览器打开：`http://127.0.0.1:8081`
 
-> `chown` 为**可选**。本机用户已是 uid 1000、或 Docker Desktop（macOS）通常可跳过；仅宿主机 `data` 属主不对（常见：曾用 root 建过目录）时才需要。
+> 默认把账号数据存在 Docker **命名卷** `ecloud_data`（不绑宿主机目录），**一般不用** `chown` / root。容器内以 uid 1000 运行。
 
 #### Windows（PowerShell）
 
@@ -234,26 +230,53 @@ docker compose up -d --build
 # 看日志
 docker compose logs -f
 
-# 停止（账号数据在 ./data，不会丢）
+# 停止（账号数据在命名卷 ecloud_data，不会丢；勿加 -v 除非要清空数据）
 docker compose down
 
 # 更新代码后重建
 git pull
 docker compose up -d --build
+
+# 备份账号数据到当前目录 data-backup/
+docker compose cp ecloud-cmsszte-alive:/app/data ./data-backup
+
+# 从备份恢复（容器已 up 时）
+docker compose cp ./data-backup/. ecloud-cmsszte-alive:/app/data
 ```
 
-**方式 C 注意（#75fixap 三端一致 / Debian 权限）：**
+#### 可选：绑定宿主机 `./data`（开发 / 要直接摸文件）
 
-- 默认 `docker-compose.yml` 使用 **bridge 网络 + `ports: "8081:8081"`**，**Linux / Windows / macOS Docker Desktop 均可**。浏览器打开 `http://127.0.0.1:8081`。
-- 容器内进程监听 `0.0.0.0:8081`（`web --host 0.0.0.0 --port 8081`）。若 8081 被占用：改 compose 的 `ports` / `command --port`，或先释放端口。
+默认命名卷即可。只有需要仓库旁可见目录、或与本机 CLI 共用配置时：
+
+```bash
+mkdir -p data
+# Linux：仅当目录对 uid 1000 不可写时（例如曾用 root 建过）
+sudo chown -R 1000:1000 data
+docker compose -f docker-compose.yml -f docker-compose.bind.yml up -d --build
+```
+
+#### 从旧版 `./data` bind 迁到命名卷
+
+若你以前用过 `./data` 挂载、里面已有账号：
+
+```bash
+docker compose up -d --build
+docker compose cp ./data/. ecloud-cmsszte-alive:/app/data
+docker compose restart
+```
+
+**方式 C 注意（#75fixap 三端一致）：**
+
+- 默认 `docker-compose.yml`：**bridge + `ports: "8081:8081"` + 命名卷 `ecloud_data`**，**Linux / Windows / macOS Docker Desktop 均可**，无需宿主机 `chown`。
+- 容器内进程监听 `0.0.0.0:8081`。若 8081 被占用：改 compose 的 `ports` / `command --port`，或先释放端口。
 - **Linux 可选 host 网络**（CAG mint / Path B 更接近 CLI）：  
   `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build`  
-  Windows / macOS **不要**用 host override（Docker Desktop 上 host 网不等于 Linux host）。
-- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活。** 镜像内已带 Python 与 WebUI；浏览器打开 `8081` 登录账号、选桌面即可开保活。
-- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**，内含产品密钥 **`PublicKey.csap_id`**（16 字节 AES，**不是账号密码**），供 Path B 参数 mint/decode。仓库 stub 已够用；若你本机另有 `installinfo.ini` 要覆盖：  
+  Windows / macOS **不要**用 host override。
+- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活。** 镜像内已带 Python 与 WebUI；浏览器打开 `8081` 登录、选桌面即可。
+- 默认挂载 **`./docker/stubs/installinfo.ini`**（产品 `PublicKey.csap_id`，**不是账号密码**）。覆盖：  
   `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
-- **Debian/Ubuntu 权限**：容器 `user: "1000:1000"`；见上方 Linux 步骤里可选的 `mkdir -p data` + `sudo chown -R 1000:1000 data`。若当前用户即 1000，也可用 `chmod -R u+rwX data` 代替 chown。
-- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，优先查 **data 权限**与**端口冲突**。
+- **`docker compose down -v` 会删除命名卷 `ecloud_data`（账号清空）**；日常停服用 `down`（不要 `-v`）。
+- 打开页面若 **HTTP 500**：先 `docker compose logs -f`；默认命名卷下优先查端口冲突 / 镜像构建失败；仅在使用 `docker-compose.bind.yml` 时再查宿主机 `./data` 权限。
 
 ---
 
@@ -331,7 +354,8 @@ systemctl --user status ecloud-spice-keepalive.service
 | 文件 | 作用 |
 |------|------|
 | `cloud_pc.json` | 账号、token、选中的桌面（建议 `chmod 600`） |
-| `./data/`（Docker） | 容器内账号与状态 |
+| Docker 命名卷 `ecloud_data` | 方式 C 默认账号与状态（备份见上 `docker compose cp`） |
+| `./data/`（可选 bind） | 仅使用 `docker-compose.bind.yml` 时出现在仓库旁 |
 
 ---
 
@@ -363,10 +387,12 @@ systemctl --user status ecloud-spice-keepalive.service
 ├── main.py                      # 命令入口
 ├── bin/public-spice-keepalive   # Linux/macOS 可选薄壳
 ├── web/                         # 网页控制台
-├── docker-compose.yml           # 方式 C
+├── docker-compose.yml           # 方式 C（默认命名卷 ecloud_data）
+├── docker-compose.bind.yml      # 可选：绑 ./data
+├── docker-compose.host.yml      # 可选：Linux host 网络
 ├── requirements.txt
 ├── packaging/systemd/           # 可选常驻
-└── data/                        # Docker 数据（运行后生成）
+└── data/                        # 仅 bind 模式或本机 CLI 使用
 ```
 
 ---
