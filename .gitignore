@@ -50,7 +50,8 @@ tools_raw/
 fixtures/
 scripts/
 tools/
-tests/
+# unit tests tracked (was ignored; broke clone-side unittest)
+# pycache still covered by global __pycache__/ rules below
 nest/
 
 # Runtime / cache
