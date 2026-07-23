@@ -11,7 +11,7 @@
 > - **H3C 及其它非 CMSSZTE** → **HTTP** 桌面保活链路  
 > **不支持** VMware Tools（vmtool）以及爱家账号。
 
-你不需要会写代码。大多数情况下：**复制一段命令 → 按提示登录 → 选桌面 → 开始保活**。
+你不需要会写代码。大多数情况下：**先装环境 → 逐条运行命令 → 按提示输入账号/密码/验证码 → 选桌面 → 开始保活**（登录步骤不能「无交互一键粘贴」）。
 
 仓库（本项目当前维护地址）：
 
@@ -47,41 +47,56 @@ https://github.com/1936-zero/ecloud-cmsszte-alive.git
 
 ---
 
-## 一键安装并启动
+## 安装并启动
 
-> 已在项目目录时，可跳过 `git clone`，从安装依赖那一步开始。
+> 已在项目目录时，可跳过 `git clone`，从安装依赖那一步开始。  
+> **重要**：`login` / `select-desktop` 是**交互命令**，会在终端里提示你输入**账号、密码、短信验证码**（以及选桌面编号）。  
+> **不要**把安装命令和登录命令用 `&&` 拼成「一键粘贴」——装完依赖后，**逐条**执行下面「登录与保活」的命令，停在提示符时按屏幕输入即可。
 
 ### 方式 A：本机 Python 命令行（推荐先跑通）
 
 #### Linux（Ubuntu / Debian / 云服务器）
 
-复制**整段**到终端：
+**① 安装（可复制整段；无交互）：**
 
 ```bash
-sudo apt update && sudo apt install -y git python3 python3-pip \
-&& git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git \
-&& cd ecloud-cmsszte-alive \
-&& pip3 install -r requirements.txt --user \
-&& python3 main.py login \
-&& python3 main.py list-desktops \
-&& python3 main.py select-desktop \
-&& python3 main.py setup \
-&& python3 main.py desktop-keepalive
+sudo apt update && sudo apt install -y git python3 python3-pip
+git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
+cd ecloud-cmsszte-alive
+pip3 install -r requirements.txt --user
 ```
+
+**② 登录与保活（逐条执行；需键盘输入）：**
+
+```bash
+cd ecloud-cmsszte-alive   # 若尚未进入目录
+python3 main.py login              # 提示 account / password；要短信时再输入验证码（半角数字）
+python3 main.py list-desktops      # 可选：先看有几台
+python3 main.py select-desktop     # 交互选桌面（回车默认 0）
+python3 main.py desktop-keepalive  # 前台保活；停止按 Ctrl+C
+```
+
+> 可选：`python3 main.py setup` 可单独做开机+准备连接；**一般不必**——`desktop-keepalive` 已内置 power-first。
 
 #### macOS
 
-先安装 [Homebrew](https://brew.sh/)（若尚未安装），再执行：
+先安装 [Homebrew](https://brew.sh/)（若尚未安装）。
+
+**① 安装：**
 
 ```bash
 brew install git python
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
 python3 -m pip install -r requirements.txt --user
+```
+
+**② 登录与保活（逐条执行）：**
+
+```bash
 python3 main.py login
-python3 main.py list-desktops
+python3 main.py list-desktops      # 可选
 python3 main.py select-desktop
-python3 main.py setup
 python3 main.py desktop-keepalive
 ```
 
@@ -89,14 +104,20 @@ python3 main.py desktop-keepalive
 
 先安装 [Git](https://git-scm.com/download/win) 与 [Python 3.10+](https://www.python.org/downloads/)（勾选 **Add python.exe to PATH**）。
 
+**① 安装：**
+
 ```powershell
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
 python3 -m pip install -r requirements.txt --user
+```
+
+**② 登录与保活（逐条执行）：**
+
+```powershell
 python3 main.py login
-python3 main.py list-desktops
+python3 main.py list-desktops      # 可选
 python3 main.py select-desktop
-python3 main.py setup
 python3 main.py desktop-keepalive
 ```
 
@@ -104,10 +125,10 @@ python3 main.py desktop-keepalive
 
 **命令含义（按顺序）：**
 
-1. `login`：账号、密码；若要短信，再输入**短信验证码**（不是用短信当密码）
+1. `login`：终端交互——账号、密码；若要短信，再输入**短信验证码**（不是用短信当密码；半角数字）
 2. `list-desktops` / `select-desktop`：看有几台、选一台（回车默认 0）
-3. `setup`：需要时开机 + 准备连接（可选手动；见下）
-4. `desktop-keepalive` / `keepalive`：前台保活（**默认内置先开机再分流**，一般不必再单独 `setup`）；停止按 `Ctrl+C`
+3. `setup`：**可选**；需要时开机 + 准备连接（保活命令已内置 power-first，多数情况可跳过）
+4. `desktop-keepalive` / `keepalive`：前台保活；停止按 `Ctrl+C`
 
 **保活怎么走（CLI / WebUI 同序）：**
 
