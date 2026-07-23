@@ -40,6 +40,7 @@ https://github.com/1936-zero/ecloud-cmsszte-alive.git
 | 适合谁 | 习惯终端、先跑通一台 | 想用浏览器、已装 Python | 想一键容器、少装环境 |
 | 本机需要 | Git + Python 3.10+ | 同左 | [Docker](https://www.docker.com/products/docker-desktop/) |
 | 打开方式 | 终端看日志 | 浏览器 `http://127.0.0.1:8081` | 浏览器 `http://127.0.0.1:8081` |
+| 网络说明 | 本机进程 | 本机进程 | **Linux：默认 host 容器**；**Win/mac Desktop：须 bridge 覆盖**（见方式 C） |
 
 账号、密码、token **只保存在你自己电脑**上，不要发给别人，也不要提交到 Git。
 
@@ -200,7 +201,12 @@ python3 main.py web --host 127.0.0.1 --port 8081
 
 ### 方式 C：Docker 网页版（本机可不装 Python）
 
-#### Linux（推荐：默认 host 网络）
+> **命令按系统二选一，不要混用：**  
+> - **Linux** → 只用 `docker compose …`（**默认 host 网络容器**，适合 Path B）  
+> - **Windows / macOS Docker Desktop** → **必须**每次都加  
+>   `-f docker-compose.yml -f docker-compose.bridge.yml`（**bridge 覆盖**；Desktop 的 host ≠ Linux host）
+
+#### Linux：host 网络容器（默认，推荐）
 
 ```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
@@ -210,12 +216,26 @@ docker compose up -d --build
 
 浏览器打开：`http://127.0.0.1:8081`
 
-> **默认 `network_mode: host`**（Path B / CAG `:8899` mint 与本机 CLI 同路由，减轻 bridge NAT 读超时）。  
-> 账号数据在命名卷 **`ecloud_data`**（一般不用 `chown`）。容器 uid 1000。WebUI 直接占宿主机 **8081**。
+> 默认 **`network_mode: host`** + 命名卷 **`ecloud_data`**（一般不用 `chown`）。  
+> Path B / CAG `:8899` mint 与本机同路由。WebUI 直接占宿主机 **8081**。容器 uid 1000。
 
-#### macOS / Windows（Docker Desktop → 请用 bridge）
+**Linux 日常命令：**
 
-Docker Desktop 的 host 网络**不等于** Linux host；请加 bridge 覆盖：
+```bash
+docker compose logs -f
+docker compose down          # 停容器；勿加 -v（-v 会删命名卷、清空账号）
+git pull
+docker compose up -d --build
+# 强制按新 compose 重建（例如刚改网络模式后）
+docker compose up -d --force-recreate
+```
+
+#### Windows / macOS：Docker Desktop + bridge 覆盖（必加）
+
+Docker Desktop **没有**与 Linux 等价的 host 网络，**不要**只跑 `docker compose up`（那会按默认 host，在 Desktop 上无效/异常）。  
+请**始终**带上 bridge 覆盖文件：
+
+**macOS / Windows（Git Bash、WSL 内 Docker 若走 Desktop 引擎时同理）：**
 
 ```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
@@ -223,63 +243,89 @@ cd ecloud-cmsszte-alive
 docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
 ```
 
-PowerShell 相同。浏览器：`http://127.0.0.1:8081`
+**Windows PowerShell：**
 
-#### Docker 常用命令（三端相同）
+```powershell
+git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
+cd ecloud-cmsszte-alive
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
+```
+
+浏览器打开：`http://127.0.0.1:8081`（bridge 映射 `8081:8081`）
+
+**Win / mac 日常命令（同样必须带两个 `-f`）：**
 
 ```bash
-# 看日志
-docker compose logs -f
-
-# 停止（账号数据在命名卷 ecloud_data，不会丢；勿加 -v 除非要清空数据）
-docker compose down
-
-# 更新代码后重建
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml logs -f
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml down
 git pull
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --force-recreate
+```
 
-# 备份账号数据到当前目录 data-backup/
+> bridge 下 Path B 若出现 `ReadTimeout … :8899`：可加大 `CLOUD_PC_MINT_TIMEOUT` 后重建；仍不稳请改用 **方式 B（本机 Python 网页）** 或 **方式 A**，不要用 Desktop「假 host」硬顶。
+
+#### 备份 / 恢复账号（Linux 与 Win/mac 相同）
+
+```bash
+# 备份到当前目录 data-backup/
 docker compose cp ecloud-cmsszte-alive:/app/data ./data-backup
 
-# 从备份恢复（容器已 up 时）
+# 恢复（容器已 up）
 docker compose cp ./data-backup/. ecloud-cmsszte-alive:/app/data
 ```
 
+> Win/mac 若 `docker compose cp` 报项目名歧义，在命令前同样加上  
+> `-f docker-compose.yml -f docker-compose.bridge.yml`。
+
 #### 可选：绑定宿主机 `./data`（开发 / 要直接摸文件）
 
-默认命名卷即可。只有需要仓库旁可见目录、或与本机 CLI 共用配置时：
+默认命名卷即可。需要仓库旁可见目录、或与本机 CLI 共用配置时：
+
+**Linux（host + bind）：**
 
 ```bash
 mkdir -p data
-# Linux：仅当目录对 uid 1000 不可写时（例如曾用 root 建过）
+# 仅当目录对 uid 1000 不可写时（例如曾用 root 建过）
 sudo chown -R 1000:1000 data
 docker compose -f docker-compose.yml -f docker-compose.bind.yml up -d --build
 ```
 
-#### 从旧版 `./data` bind 迁到命名卷
-
-若你以前用过 `./data` 挂载、里面已有账号：
+**Win / mac（bridge + bind，两个覆盖都要）：**
 
 ```bash
+mkdir -p data
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml -f docker-compose.bind.yml up -d --build
+```
+
+#### 从旧版 `./data` bind 迁到命名卷
+
+```bash
+# Linux
 docker compose up -d --build
 docker compose cp ./data/. ecloud-cmsszte-alive:/app/data
 docker compose restart
+
+# Win / mac：up 时带 bridge
+# docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
+# docker compose -f docker-compose.yml -f docker-compose.bridge.yml cp ./data/. ecloud-cmsszte-alive:/app/data
+# docker compose -f docker-compose.yml -f docker-compose.bridge.yml restart
 ```
 
 **方式 C 注意：**
 
-- 默认 `docker-compose.yml`：**`network_mode: host` + 命名卷 `ecloud_data`**（面向 **Linux** Path B / CAG mint）。WebUI：`http://127.0.0.1:8081`（无 `ports:` 映射，进程直接听宿主机）。
-- **Windows / macOS Docker Desktop**：用  
+- **Linux 默认**：`docker-compose.yml` = **`network_mode: host` + 命名卷 `ecloud_data`**。WebUI：`http://127.0.0.1:8081`（无 `ports:` 映射）。
+- **Windows / macOS Docker Desktop 默认命令必须是：**  
   `docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build`  
-  （bridge + `8081:8081`）。纯 host 在 Desktop 上无效/不等价。
-- Linux 若仍要 bridge（隔离 / 多实例端口映射）：同样加 `docker-compose.bridge.yml`。bridge 下 CAG mint 可能更慢，出现 `ReadTimeout … :8899` 时优先改回默认 host。
-- 宿主机 **8081 被占用**：改 `command` 里 `--port`，或先释放端口（host 模式下改 `ports:` 无效）。
-- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活**（不依赖官方桌面客户端）。
+  （bridge + `8081:8081`）。**不要**指望 Desktop 上的 host。
+- Linux 若故意要 bridge（隔离 / 多实例端口映射）：也可加 `docker-compose.bridge.yml`；CAG mint 变慢或 `ReadTimeout :8899` 时改回**不带** bridge 的默认 host。
+- 宿主机 **8081 被占用**：host 模式改 `command` 的 `--port` 或释放端口（改 `ports:` 无效）；bridge 模式可改 `docker-compose.bridge.yml` 里的 `ports`。
+- **方式 C = Docker 起 WebUI，Path B 或 HTTP 保活**（不依赖官方桌面客户端）。
 - 默认挂载 **`./docker/stubs/installinfo.ini`**（产品 `PublicKey.csap_id`，**不是账号密码**）。覆盖：  
   `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
 - **`docker compose down -v` 会删除命名卷 `ecloud_data`（账号清空）**；日常停服用 `down`（不要 `-v`）。
-- 打开页面若 **HTTP 500**：先 `docker compose logs -f`；默认命名卷下优先查端口冲突 / 镜像构建失败；仅 bind 模式再查 `./data` 权限。
-- 旧文档里的 `docker-compose.host.yml` 已为 **no-op**（默认即 host）；请勿再当作「可选开关」依赖。
+- 打开页面若 **HTTP 500**：先看日志；优先查端口冲突 / 构建失败；仅 bind 模式再查 `./data` 权限。
+- 旧文件 `docker-compose.host.yml` 为兼容 no-op（默认已是 host），**不必**再 `-f` 它。
 
 ---
 
