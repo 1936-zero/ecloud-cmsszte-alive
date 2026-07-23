@@ -53,6 +53,25 @@ def load_config() -> dict:
 def save_config(cfg: dict) -> None:
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def _ensure_interactive(action: str = "登录") -> None:
+    """Non-TTY must not fall into input()/EOFError (systemd/pipe/Docker exec)."""
+    if not sys.stdin.isatty():
+        log.error(
+            "需要交互%s，但当前 stdin 非 TTY。请先执行: python3 main.py login",
+            action,
+        )
+        sys.exit(2)
+
+
+def _prompt_line(prompt: str) -> str:
+    _ensure_interactive()
+    return input(prompt).strip()
 
 
 def build_client(cfg: dict) -> EcloudHttpUtil:
@@ -74,8 +93,11 @@ def do_login(cfg: dict):
     """Run full login flow (with SMS branch interaction). Returns access_token or None."""
     client = build_client(cfg)
 
-    username = cfg.get("username") or input("account: ").strip()
+    username = cfg.get("username")
     password = cfg.get("password")
+    if not username or not password:
+        _ensure_interactive("登录（需账号/密码）")
+    username = username or _prompt_line("account: ")
     if not password:
         password = getpass.getpass("password: ")
     cfg["username"], cfg["password"] = username, password
@@ -107,11 +129,11 @@ def do_login(cfg: dict):
         # 真网 30002009 的 body.code 常为 null；官方仍调用 trustDevice
         log.info("need device trust. mobile: %s login_code_present=%s",
                  result.get("mobile"), bool(login_code))
-        mobile = result.get("mobile") or input("mobile: ").strip()
+        mobile = result.get("mobile") or _prompt_line("mobile: ")
         # 官方 certificaty 发信用 codeType=trust；login 场景码无法用于 trustDevice
         login.send_sms(client, mobile, code_type="trust")
         # 请用半角数字；程序也会把全角 ０-９ 自动转半角
-        sms_code = login.normalize_sms_code(input("sms code (half-width digits): "))
+        sms_code = login.normalize_sms_code(_prompt_line("sms code (half-width digits): "))
         log.info("sms code normalized len=%d", len(sms_code))
         try:
             r = login.complete_device_trust(
@@ -129,9 +151,9 @@ def do_login(cfg: dict):
     elif status == login.LoginResult.NEED_TWO_FACTOR:
         log.info("need two-factor. mobile: %s login_code_present=%s",
                  result.get("mobile"), bool(login_code))
-        mobile = result.get("mobile") or input("mobile: ").strip()
+        mobile = result.get("mobile") or _prompt_line("mobile: ")
         login.send_two_factor_sms(client, mobile, username)
-        sms_code = login.normalize_sms_code(input("two-factor sms code (half-width): "))
+        sms_code = login.normalize_sms_code(_prompt_line("two-factor sms code (half-width): "))
         try:
             r = login.complete_two_factor(
                 client, mobile, username, password, sms_code, code=login_code,
@@ -148,9 +170,9 @@ def do_login(cfg: dict):
     elif status == login.LoginResult.NEED_ENHANCED_SMS:
         log.info("need enhanced-strategy sms. mobile: %s login_code_present=%s",
                  result.get("mobile"), bool(login_code))
-        mobile = result.get("mobile") or input("mobile: ").strip()
+        mobile = result.get("mobile") or _prompt_line("mobile: ")
         login.send_sms(client, mobile)
-        sms_code = login.normalize_sms_code(input("enhanced sms code (half-width): "))
+        sms_code = login.normalize_sms_code(_prompt_line("enhanced sms code (half-width): "))
         try:
             r = login.complete_enhanced_sms(
                 client, mobile, username, sms_code, code=login_code,
@@ -210,7 +232,7 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
             else:
                 sys.exit(1)
         if desktop is None:
-            log.error("账号下没有可用桌面。请先在官方客户端创建/开机桌面。")
+            log.error("账号下没有可用桌面。请先在门户或本工具内创建/开机桌面。")
             sys.exit(1)
         instance_id = desktop.instance_id
         machine_id = desktop.machine_id or machine_id
@@ -717,7 +739,7 @@ def cmd_select_desktop(args):
         log.error("拉取桌面列表失败: %s", e)
         sys.exit(1)
     if not desktops:
-        log.error("账号下没有可用桌面。请先在官方客户端创建/开机。")
+        log.error("账号下没有可用桌面。请先在门户或本工具内创建/开机桌面。")
         sys.exit(1)
 
     try:
@@ -1380,7 +1402,7 @@ def main():
     # Web UI
     wp = sub.add_parser("web", help="start Web UI (Flask)")
     wp.add_argument("--host", default="0.0.0.0", help="bind host (default 0.0.0.0)")
-    wp.add_argument("--port", type=int, default=8080, help="port (default 8080)")
+    wp.add_argument("--port", type=int, default=8081, help="port (default 8081; same as Docker)")
 
     args = p.parse_args()
     level = logging.DEBUG if args.verbose >= 2 else logging.INFO

@@ -103,6 +103,10 @@ def _save_cfg(cfg: dict):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_file, CONFIG_FILE)
+        try:
+            os.chmod(CONFIG_FILE, 0o600)
+        except OSError:
+            pass
     finally:
         if os.path.exists(tmp_file):
             os.unlink(tmp_file)
@@ -473,7 +477,7 @@ def create_app() -> Flask:
     @app.route("/api/health")
     @app.route("/api/system/health")
     def api_health():
-        return jsonify({"ok": True, "service": "ecloud-cloudpc-keepalive", "version": _WEBUI_VERSION})
+        return jsonify({"ok": True, "service": "ecloud-cmsszte-alive", "version": _WEBUI_VERSION})
 
     @app.route("/api/system/info")
     @app.route("/api/info")
@@ -489,7 +493,7 @@ def create_app() -> Flask:
         has_env = bool((os.environ.get(_ACCESS_TOKEN_ENV) or "").strip())
         return jsonify({
             "ok": True,
-            "service": "ecloud-cloudpc-keepalive",
+            "service": "ecloud-cmsszte-alive",
             "version": _WEBUI_VERSION,
             "dataDir": str(_webui_data_dir()),
             "authEnabled": bool(expected),
@@ -1103,8 +1107,8 @@ def create_app() -> Flask:
     return app
 
 
-def run(host: str = "0.0.0.0", port: int = 8080):
-    """启动 Flask 服务。"""
+def run(host: str = "0.0.0.0", port: int = 8081):
+    """启动 Flask 服务。默认 8081，与 Docker 方式 C 对齐。"""
     app = create_app()
     _start_keepalive_autostart_watchdog()
     log.info("Web UI 启动: http://%s:%d", host, port)

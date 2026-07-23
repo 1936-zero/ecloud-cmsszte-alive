@@ -39,7 +39,7 @@ https://github.com/1936-zero/ecloud-cmsszte-alive.git
 |---|---|---|---|
 | 适合谁 | 习惯终端、先跑通一台 | 想用浏览器、已装 Python | 想一键容器、少装环境 |
 | 本机需要 | Git + Python 3.10+ | 同左 | [Docker](https://www.docker.com/products/docker-desktop/) |
-| 打开方式 | 终端看日志 | 浏览器 `http://127.0.0.1:8080` | 浏览器 `http://127.0.0.1:8081` |
+| 打开方式 | 终端看日志 | 浏览器 `http://127.0.0.1:8081` | 浏览器 `http://127.0.0.1:8081` |
 
 账号、密码、token **只保存在你自己电脑**上，不要发给别人，也不要提交到 Git。
 
@@ -166,13 +166,13 @@ Linux / macOS 也可用薄壳（与后两步等价）：
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
 python3 -m pip install -r requirements.txt --user
-python3 main.py web --host 127.0.0.1 --port 8080
+python3 main.py web --host 127.0.0.1 --port 8081
 ```
 
 浏览器打开：
 
 ```text
-http://127.0.0.1:8080
+http://127.0.0.1:8081
 ```
 
 #### Windows（PowerShell）
@@ -181,10 +181,10 @@ http://127.0.0.1:8080
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
 python3 -m pip install -r requirements.txt --user
-python3 main.py web --host 127.0.0.1 --port 8080
+python3 main.py web --host 127.0.0.1 --port 8081
 ```
 
-浏览器打开：`http://127.0.0.1:8080`  
+浏览器打开：`http://127.0.0.1:8081`  
 找不到 `python3` 时改用 `python`。
 
 #### 网页里怎么操作
@@ -205,10 +205,16 @@ python3 main.py web --host 127.0.0.1 --port 8080
 ```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
+mkdir -p data
+# 可选：仅当容器写 data 失败 / 页面 HTTP 500 时需要（Debian/Ubuntu 常见）
+# 容器以 uid 1000 运行；data 若属 root 则 chown 一次即可
+sudo chown -R 1000:1000 data
 docker compose up -d --build
 ```
 
 浏览器打开：`http://127.0.0.1:8081`
+
+> `chown` 为**可选**。本机用户已是 uid 1000、或 Docker Desktop（macOS）通常可跳过；仅宿主机 `data` 属主不对（常见：曾用 root 建过目录）时才需要。
 
 #### Windows（PowerShell）
 
@@ -246,14 +252,7 @@ docker compose up -d --build
 - **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活。** 镜像内已带 Python 与 WebUI；浏览器打开 `8081` 登录账号、选桌面即可开保活。
 - 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**，内含产品密钥 **`PublicKey.csap_id`**（16 字节 AES，**不是账号密码**），供 Path B 参数 mint/decode。仓库 stub 已够用；若你本机另有 `installinfo.ini` 要覆盖：  
   `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
-- **Debian/Ubuntu 上最常见的「权限问题」是 `./data` 目录属主。** 容器默认 `user: "1000:1000"`，宿主机若用 root 建过 `data` 或权限是 `root:root`，容器内写会话/账号会失败（页面 500 或无法保存）。推荐在 clone 后、首次 `up` 前执行：
-  ```bash
-  mkdir -p data
-  sudo chown -R 1000:1000 data
-  # 或（当前用户即 1000 时）：chmod -R u+rwX data
-  docker compose up -d --build
-  ```
-  Docker Desktop（Win/mac）通常只需 `mkdir -p data`。
+- **Debian/Ubuntu 权限**：容器 `user: "1000:1000"`；见上方 Linux 步骤里可选的 `mkdir -p data` + `sudo chown -R 1000:1000 data`。若当前用户即 1000，也可用 `chmod -R u+rwX data` 代替 chown。
 - 打开页面若 **HTTP 500**：先 `docker compose logs -f`，优先查 **data 权限**与**端口冲突**。
 
 ---
@@ -297,7 +296,7 @@ python3 main.py desktop-keepalive
 | `python3 main.py setup` | 开机（如需）+ 准备连接（可选；保活命令已内置 power-first） |
 | `python3 main.py desktop-keepalive` | 前台保活：先开机 → 按 origin 走 Path B 或 HTTP |
 | `python3 main.py keepalive` | 同上系入口（默认 Path B + oracle；可用 `--legacy-http`） |
-| `python3 main.py web` | 本机网页控制台（默认 `0.0.0.0:8080`；Docker 方式 C 用 8081） |
+| `python3 main.py web` | 本机网页控制台（默认 `0.0.0.0:8081`，与 Docker 方式 C 一致） |
 | `./bin/public-spice-keepalive setup` | 同 `setup`（Linux / macOS） |
 | `./bin/public-spice-keepalive run` | 同 `desktop-keepalive` |
 

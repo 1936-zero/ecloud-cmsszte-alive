@@ -239,6 +239,10 @@ class AccountRuntime:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.config_path)
+            try:
+                os.chmod(self.config_path, 0o600)
+            except OSError:
+                pass
         except Exception as e:
             log.warning("save %s failed: %s", self.config_path, e)
             try:
@@ -1340,6 +1344,10 @@ class AccountRegistry:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self.index_path)
+        try:
+            os.chmod(self.index_path, 0o600)
+        except OSError:
+            pass
 
     def _load_global_tail(self, max_lines: int = 400) -> None:
         if not self.global_logs_path.is_file():

@@ -11,9 +11,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-RUN mkdir -p /app/data && chmod 0775 /app/data
+# Non-root runtime (compose user 1000:1000). Host bind ./data must be writable by uid 1000.
+RUN mkdir -p /app/data \
+    && chown -R 1000:1000 /app/data \
+    && chmod 0775 /app/data
 
 EXPOSE 8081
+
+USER 1000:1000
 
 ENTRYPOINT ["python", "main.py"]
 CMD ["web", "--host", "0.0.0.0", "--port", "8081"]
