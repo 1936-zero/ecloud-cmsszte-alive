@@ -1,0 +1,13 @@
+# Optional override: Docker bridge + published 8081
+# For Windows / macOS Docker Desktop (host network is NOT equivalent to Linux), or if you
+# prefer NAT isolation on Linux.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
+#
+# Note: under bridge, CAG mint (Path B :8899) may be slower / ReadTimeout more often than host.
+services:
+  ecloud-keepalive:
+    network_mode: bridge
+    ports:
+      - "8081:8081"

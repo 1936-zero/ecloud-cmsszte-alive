@@ -200,7 +200,7 @@ python3 main.py web --host 127.0.0.1 --port 8081
 
 ### 方式 C：Docker 网页版（本机可不装 Python）
 
-#### Linux / macOS
+#### Linux（推荐：默认 host 网络）
 
 ```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
@@ -210,19 +210,20 @@ docker compose up -d --build
 
 浏览器打开：`http://127.0.0.1:8081`
 
-> 默认把账号数据存在 Docker **命名卷** `ecloud_data`（不绑宿主机目录），**一般不用** `chown` / root。容器内以 uid 1000 运行。
+> **默认 `network_mode: host`**（Path B / CAG `:8899` mint 与本机 CLI 同路由，减轻 bridge NAT 读超时）。  
+> 账号数据在命名卷 **`ecloud_data`**（一般不用 `chown`）。容器 uid 1000。WebUI 直接占宿主机 **8081**。
 
-#### Windows（PowerShell）
+#### macOS / Windows（Docker Desktop → 请用 bridge）
 
-先安装并打开 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，确认托盘里 Docker 已运行：
+Docker Desktop 的 host 网络**不等于** Linux host；请加 bridge 覆盖：
 
-```powershell
+```bash
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
 ```
 
-浏览器打开：`http://127.0.0.1:8081`
+PowerShell 相同。浏览器：`http://127.0.0.1:8081`
 
 #### Docker 常用命令（三端相同）
 
@@ -265,18 +266,20 @@ docker compose cp ./data/. ecloud-cmsszte-alive:/app/data
 docker compose restart
 ```
 
-**方式 C 注意（#75fixap 三端一致）：**
+**方式 C 注意：**
 
-- 默认 `docker-compose.yml`：**bridge + `ports: "8081:8081"` + 命名卷 `ecloud_data`**，**Linux / Windows / macOS Docker Desktop 均可**，无需宿主机 `chown`。
-- 容器内进程监听 `0.0.0.0:8081`。若 8081 被占用：改 compose 的 `ports` / `command --port`，或先释放端口。
-- **Linux 可选 host 网络**（CAG mint / Path B 更接近 CLI）：  
-  `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build`  
-  Windows / macOS **不要**用 host override。
-- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活。** 镜像内已带 Python 与 WebUI；浏览器打开 `8081` 登录、选桌面即可。
+- 默认 `docker-compose.yml`：**`network_mode: host` + 命名卷 `ecloud_data`**（面向 **Linux** Path B / CAG mint）。WebUI：`http://127.0.0.1:8081`（无 `ports:` 映射，进程直接听宿主机）。
+- **Windows / macOS Docker Desktop**：用  
+  `docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build`  
+  （bridge + `8081:8081`）。纯 host 在 Desktop 上无效/不等价。
+- Linux 若仍要 bridge（隔离 / 多实例端口映射）：同样加 `docker-compose.bridge.yml`。bridge 下 CAG mint 可能更慢，出现 `ReadTimeout … :8899` 时优先改回默认 host。
+- 宿主机 **8081 被占用**：改 `command` 里 `--port`，或先释放端口（host 模式下改 `ports:` 无效）。
+- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活**（不依赖官方桌面客户端）。
 - 默认挂载 **`./docker/stubs/installinfo.ini`**（产品 `PublicKey.csap_id`，**不是账号密码**）。覆盖：  
   `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
 - **`docker compose down -v` 会删除命名卷 `ecloud_data`（账号清空）**；日常停服用 `down`（不要 `-v`）。
-- 打开页面若 **HTTP 500**：先 `docker compose logs -f`；默认命名卷下优先查端口冲突 / 镜像构建失败；仅在使用 `docker-compose.bind.yml` 时再查宿主机 `./data` 权限。
+- 打开页面若 **HTTP 500**：先 `docker compose logs -f`；默认命名卷下优先查端口冲突 / 镜像构建失败；仅 bind 模式再查 `./data` 权限。
+- 旧文档里的 `docker-compose.host.yml` 已为 **no-op**（默认即 host）；请勿再当作「可选开关」依赖。
 
 ---
 
@@ -387,9 +390,10 @@ systemctl --user status ecloud-spice-keepalive.service
 ├── main.py                      # 命令入口
 ├── bin/public-spice-keepalive   # Linux/macOS 可选薄壳
 ├── web/                         # 网页控制台
-├── docker-compose.yml           # 方式 C（默认命名卷 ecloud_data）
+├── docker-compose.yml           # 方式 C 默认：host 网络 + 命名卷 ecloud_data
+├── docker-compose.bridge.yml    # 可选：Win/mac Desktop 或 Linux bridge
 ├── docker-compose.bind.yml      # 可选：绑 ./data
-├── docker-compose.host.yml      # 可选：Linux host 网络
+├── docker-compose.host.yml      # 兼容旧脚本（no-op，默认已是 host）
 ├── requirements.txt
 ├── packaging/systemd/           # 可选常驻
 └── data/                        # 仅 bind 模式或本机 CLI 使用

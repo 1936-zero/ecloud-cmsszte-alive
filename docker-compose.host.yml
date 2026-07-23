@@ -1,11 +1,11 @@
-# Optional override: Linux host network (better CAG mint / Path B latency).
-# Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build
+# DEPRECATED: host network is now the default in docker-compose.yml.
+# This file is kept so old docs/scripts still merge cleanly (no-op / reinforces host).
 #
-# Windows / macOS Docker Desktop: host network is NOT equivalent to Linux;
-# stay on default bridge + ports:8081 (docker-compose.yml only).
+# Prefer:
+#   docker compose up -d --build
+#
+# For Windows / macOS Docker Desktop use bridge instead:
+#   docker compose -f docker-compose.yml -f docker-compose.bridge.yml up -d --build
 services:
   ecloud-keepalive:
     network_mode: host
-    # host network: published ports are ignored / invalid — clear mapping
-    ports: !reset []
