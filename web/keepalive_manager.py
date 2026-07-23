@@ -299,9 +299,38 @@ class AccountKeepaliveManager:
                 self._rounds += 1
                 current_round = self._rounds
             try:
-                account_keepalive.keepalive_once(http)
-                self._record_success()
-                self._log("INFO", f"[{current_round}] 账号保活成功")
+                ok = account_keepalive.keepalive_once(http)
+                if ok:
+                    self._record_success()
+                    self._log("INFO", f"[{current_round}] 账号保活成功")
+                else:
+                    # keepalive_once returns False on token expiry (no raise)
+                    detail = "token失效，需重新登录"
+                    self._record_error(detail)
+                    self._log("WARN", f"[{current_round}] 账号保活失败: {detail}")
+                    if relogin_fn:
+                        try:
+                            token = relogin_fn()
+                            if token:
+                                http.set_token(token)
+                                self._log("INFO", "重新登录成功，立即重试账号保活")
+                                try:
+                                    ok2 = account_keepalive.keepalive_once(http)
+                                    if ok2:
+                                        self._record_success()
+                                        self._log("INFO", f"[{current_round}] 重登后账号保活成功")
+                                    else:
+                                        msg = "重登后账号保活仍返回失败"
+                                        self._record_error(msg)
+                                        self._log("WARN", f"[{current_round}] {msg}")
+                                except Exception as retry_ex:
+                                    msg = _safe_public_err(str(retry_ex))
+                                    self._record_error(msg)
+                                    self._log("WARN", f"[{current_round}] 重登后仍失败: {msg}")
+                            else:
+                                self._log("ERROR", "重新登录失败")
+                        except Exception as ex:
+                            self._log("ERROR", f"重新登录异常: {_safe_public_err(str(ex))}")
             except EcloudError as e:
                 detail = _safe_public_err(f"[{e.code}] {e.message}")
                 self._record_error(detail)
@@ -313,9 +342,14 @@ class AccountKeepaliveManager:
                             http.set_token(token)
                             self._log("INFO", "重新登录成功，立即重试账号保活")
                             try:
-                                account_keepalive.keepalive_once(http)
-                                self._record_success()
-                                self._log("INFO", f"[{current_round}] 重登后账号保活成功")
+                                ok2 = account_keepalive.keepalive_once(http)
+                                if ok2:
+                                    self._record_success()
+                                    self._log("INFO", f"[{current_round}] 重登后账号保活成功")
+                                else:
+                                    msg = "重登后账号保活仍返回失败"
+                                    self._record_error(msg)
+                                    self._log("WARN", f"[{current_round}] {msg}")
                             except Exception as retry_ex:
                                 msg = _safe_public_err(str(retry_ex))
                                 self._record_error(msg)

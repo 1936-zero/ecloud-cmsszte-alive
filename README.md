@@ -5,11 +5,11 @@
 [![Docker](https://img.shields.io/badge/Docker-可选-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![GitHub stars](https://img.shields.io/github/stars/1936-zero/ecloud-cmsszte-alive?style=social)](https://github.com/1936-zero/ecloud-cmsszte-alive)
 
-> 关掉官方客户端后，云电脑容易被回收。本工具在你自己的电脑上登录账号、选桌面，用**协议心跳**把桌面顶住。  
+> 云电脑空闲一段时间容易被系统回收。本工具在你自己的电脑上登录账号、选桌面，按厂商走两条保活链路之一，把桌面顶住。  
 > 适用于 **公众移动云电脑（ecloud）**：  
-> - **CMSSZTE / ZTE / ZTEECLOUD**（中兴 / CMSS uSmartView）→ **Path B**（SPICE + oracle 心跳）  
+> - **CMSSZTE / ZTE / ZTEECLOUD**（中兴 / CMSS uSmartView）→ **Path B**（协议心跳 + 状态核对）  
 > - **H3C 及其它非 CMSSZTE** → **HTTP** 桌面保活链路  
-> **不支持** VMware Tools（vmtool）以及爱家账号。
+> **不支持** VMware Tools（vmtool）以及爱家账号。本工具只做保活，不提供远程桌面画面操作。
 
 你不需要会写代码。大多数情况下：**先装环境 → 逐条运行命令 → 按提示输入账号/密码/验证码 → 选桌面 → 开始保活**（登录步骤不能「无交互一键粘贴」）。
 
@@ -60,11 +60,17 @@ https://github.com/1936-zero/ecloud-cmsszte-alive.git
 **① 安装（可复制整段；无交互）：**
 
 ```bash
-sudo apt update && sudo apt install -y git python3 python3-pip
+sudo apt update && sudo apt install -y git python3 python3-pip python3-venv
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
-pip3 install -r requirements.txt --user
+# Debian/Ubuntu 12+ 常开 PEP 668：不要用系统 pip 直装，用 venv
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r requirements.txt
 ```
+
+> 若仍坚持用户目录安装：`python3 -m pip install -r requirements.txt --user`；若报 `externally-managed-environment`，**必须**走上面 venv，不要 `sudo pip`。
 
 **② 登录与保活（逐条执行；需键盘输入）：**
 
@@ -146,7 +152,7 @@ Linux / macOS 也可用薄壳（与后两步等价）：
 ./bin/public-spice-keepalive run
 ```
 
-**怎样算成功？** 终端持续有保活成功日志；手机/官方客户端里该桌面仍是运行中。
+**怎样算成功？** 终端持续有保活成功日志；手机 App / 云电脑控制台里该桌面仍是运行中。
 
 ---
 
@@ -230,19 +236,25 @@ git pull
 docker compose up -d --build
 ```
 
-**方式 C 注意（#75fixap 三端一致）：**
+**方式 C 注意（#75fixap 三端一致 / Debian 权限）：**
 
 - 默认 `docker-compose.yml` 使用 **bridge 网络 + `ports: "8081:8081"`**，**Linux / Windows / macOS Docker Desktop 均可**。浏览器打开 `http://127.0.0.1:8081`。
 - 容器内进程监听 `0.0.0.0:8081`（`web --host 0.0.0.0 --port 8081`）。若 8081 被占用：改 compose 的 `ports` / `command --port`，或先释放端口。
 - **Linux 可选 host 网络**（CAG mint / Path B 更接近 CLI）：  
   `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build`  
   Windows / macOS **不要**用 host override（Docker Desktop 上 host 网不等于 Linux host）。
-- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**，内含客户端产品密钥 **`PublicKey.csap_id`**（16 字节 AES，非账号密码），**无官方客户端时 Docker WebUI 也可做 Path B mint/decode**。  
-  若要用本机官方 ini 覆盖：  
-  `INSTALLINFO_HOST=/path/to/real/installinfo.ini docker compose up -d`  
-  （Linux 官方路径示例：`/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini`）
-- 容器 `user: "1000:1000"`：请保证 `./data` 对该 uid 可写（`mkdir -p data && sudo chown -R 1000:1000 data`；Docker Desktop 上通常只需 `mkdir -p data`）。
-- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，常见是 data 权限或端口冲突。
+- **方式 C = Docker 起 WebUI，走 Path B / HTTP 保活。** 镜像内已带 Python 与 WebUI；浏览器打开 `8081` 登录账号、选桌面即可开保活。
+- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**，内含产品密钥 **`PublicKey.csap_id`**（16 字节 AES，**不是账号密码**），供 Path B 参数 mint/decode。仓库 stub 已够用；若你本机另有 `installinfo.ini` 要覆盖：  
+  `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
+- **Debian/Ubuntu 上最常见的「权限问题」是 `./data` 目录属主。** 容器默认 `user: "1000:1000"`，宿主机若用 root 建过 `data` 或权限是 `root:root`，容器内写会话/账号会失败（页面 500 或无法保存）。推荐在 clone 后、首次 `up` 前执行：
+  ```bash
+  mkdir -p data
+  sudo chown -R 1000:1000 data
+  # 或（当前用户即 1000 时）：chmod -R u+rwX data
+  docker compose up -d --build
+  ```
+  Docker Desktop（Win/mac）通常只需 `mkdir -p data`。
+- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，优先查 **data 权限**与**端口冲突**。
 
 ---
 
@@ -333,7 +345,7 @@ systemctl --user status ecloud-spice-keepalive.service
    - H3C 等 → HTTP 桌面保活  
 4. 按固定间隔重复，降低「空闲被回收」的概率  
 
-不能替代官方客户端里的远程桌面操作；只是尽量让桌面别被系统收回。
+本工具**不是**远程桌面软件，不会投屏/键鼠进云电脑；两条链路（Path B / HTTP）只负责定时心跳，尽量让桌面别被系统空闲回收。
 
 ---
 
