@@ -146,6 +146,10 @@ login → 选桌面 → 开机(power first) → 按 origin 分流
   · --legacy-http 强制 HTTP；--force-path-b 强制 Path B；--no-power 跳过开机
 ```
 
+**Path B 密钥文件（方式 A / B 本机）：** 仓库已带  
+`data/config/installinfo.ini`（产品 `PublicKey.csap_id`，**不是账号密码**）。  
+clone 后即可用，**不必**从桌面客户端复制。也可设 `INSTALLINFO_PATH=...` 覆盖。
+
 Linux / macOS 也可用薄壳（与后两步等价）：
 
 ```bash
@@ -321,7 +325,7 @@ docker compose restart
 - Linux 若故意要 bridge（隔离 / 多实例端口映射）：也可加 `docker-compose.bridge.yml`；CAG mint 变慢或 `ReadTimeout :8899` 时改回**不带** bridge 的默认 host。
 - 宿主机 **8081 被占用**：host 模式改 `command` 的 `--port` 或释放端口（改 `ports:` 无效）；bridge 模式可改 `docker-compose.bridge.yml` 里的 `ports`。
 - **方式 C = Docker 起 WebUI，Path B 或 HTTP 保活**（不依赖官方桌面客户端）。
-- 默认挂载 **`./docker/stubs/installinfo.ini`**（产品 `PublicKey.csap_id`，**不是账号密码**）。覆盖：  
+- 默认挂载 **`./docker/stubs/installinfo.ini`**（与仓库 **`data/config/installinfo.ini`** 同密钥；产品 `PublicKey.csap_id`，**不是账号密码**）。覆盖：  
   `INSTALLINFO_HOST=/path/to/installinfo.ini docker compose up -d`
 - **`docker compose down -v` 会删除命名卷 `ecloud_data`（账号清空）**；日常停服用 `down`（不要 `-v`）。
 - 打开页面若 **HTTP 500**：先看日志；优先查端口冲突 / 构建失败；仅 bind 模式再查 `./data` 权限。

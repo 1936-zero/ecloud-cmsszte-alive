@@ -57,7 +57,12 @@ nest/
 # Runtime / cache
 .cache/
 **/.cache/
-data/
+# data/* runtime (accounts/tokens) — ignore contents; MUST use data/* not data/
+# so git still descends and can un-ignore product installinfo for Path B (A/B local)
+data/*
+!data/config/
+data/config/*
+!data/config/installinfo.ini
 *.log
 keepalive.log
 
@@ -71,8 +76,7 @@ __pycache__/
 venv/
 env/
 
-# Docker/runtime data (local)
-data/
+# (no second data/ rule — would re-ignore installinfo)
 
 # IDE / OS
 .vscode/
