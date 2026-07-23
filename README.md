@@ -209,16 +209,19 @@ git pull
 docker compose up -d --build
 ```
 
-**方式 C 注意（与旧 README 不同）：**
+**方式 C 注意（#75fixap 三端一致）：**
 
-- 当前 `docker-compose.yml` 使用 **`network_mode: host`**（CAG mint 在 bridge NAT 下易超时），**没有** `ports: 8081:8080` 映射。
-- 容器进程直接监听 **本机 `8081`**（`web --host 0.0.0.0 --port 8081`），浏览器仍打开 `http://127.0.0.1:8081`。
-- 若 8081 被占用：改 compose 里 `command` 的 `--port`，或先释放端口。
-- 挂载了宿主机客户端路径  
-  `/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini`  
-  （Path B 解密连接串需要）。**没有装官方客户端 / 无此文件时**，compose 可能起不来或 Path B 失败——可暂时注释该 volume，仅用 HTTP 桌面；或先装客户端再起容器。
-- 容器 `user: "1000:1000"`：请保证 `./data` 对该 uid 可写（`mkdir -p data && sudo chown -R 1000:1000 data`）。
-- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，常见是 data 权限、缺 installinfo、或 8081 冲突；**不要**再按「改 ports 8081:8080」排障（host 网络下无效）。
+- 默认 `docker-compose.yml` 使用 **bridge 网络 + `ports: "8081:8081"`**，**Linux / Windows / macOS Docker Desktop 均可**。浏览器打开 `http://127.0.0.1:8081`。
+- 容器内进程监听 `0.0.0.0:8081`（`web --host 0.0.0.0 --port 8081`）。若 8081 被占用：改 compose 的 `ports` / `command --port`，或先释放端口。
+- **Linux 可选 host 网络**（CAG mint / Path B 更接近 CLI）：  
+  `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build`  
+  Windows / macOS **不要**用 host override（Docker Desktop 上 host 网不等于 Linux host）。
+- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**（空 `csap_id`），保证无官方客户端时也能启动 WebUI（HTTP-only；Path B mint 会失败并提示缺密钥）。  
+  本机已装官方 CMSS 客户端、需要 Path B 时：  
+  `INSTALLINFO_HOST=/path/to/real/installinfo.ini docker compose up -d`  
+  （Linux 官方路径示例：`/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini`）
+- 容器 `user: "1000:1000"`：请保证 `./data` 对该 uid 可写（`mkdir -p data && sudo chown -R 1000:1000 data`；Docker Desktop 上通常只需 `mkdir -p data`）。
+- 打开页面若 **HTTP 500**：先 `docker compose logs -f`，常见是 data 权限或端口冲突。
 
 ---
 

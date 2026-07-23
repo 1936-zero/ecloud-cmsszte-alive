@@ -8,7 +8,7 @@
 
 因此本模块的策略：
   - deviceUid：唯一需要稳定的字段（服务端用它识别设备，变化会触发"未授信设备"），
-    优先从配置读取，否则从 /etc/machine-id 派生。
+    优先从配置读取，否则从 OS machine-id / MachineGuid / IOPlatformUUID 派生。
   - 其余字段：给合理默认值即可，无需真实采集（服务端不校验）。
 """
 import os
@@ -20,16 +20,70 @@ from dataclasses import dataclass, field
 import config
 
 
+def _normalize_machine_token(raw: str) -> str:
+    """Strip separators → prefer 32 hex chars (Linux machine-id shape)."""
+    s = (raw or "").strip().replace("-", "").replace("{", "").replace("}", "")
+    if not s:
+        return ""
+    # keep hex-ish stable ids; otherwise hash-less pass-through truncated
+    hexish = "".join(c for c in s.lower() if c in "0123456789abcdef")
+    if len(hexish) >= 32:
+        return hexish[:32]
+    if len(hexish) >= 16:
+        return (hexish + hexish)[:32]
+    return s[:32]
+
+
 def _read_machine_id() -> str:
-    """读 /etc/machine-id（systemd），返回 32 位 hex；失败回退。"""
+    """Stable host id: Linux machine-id → Win MachineGuid → macOS IOPlatformUUID.
+
+    Returns 32-char hex-ish token when possible; empty → caller uses uuid4
+    (unstable across restarts — prefer config device_uid).
+    """
+    # Linux / container
     for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
         try:
             with open(path) as f:
                 mid = f.read().strip()
             if mid:
-                return mid
+                return _normalize_machine_token(mid) or mid
         except OSError:
             continue
+
+    os_name = platform.system()
+    if os_name == "Windows":
+        try:
+            import winreg  # type: ignore[import-not-found]
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+            ) as key:
+                val, _ = winreg.QueryValueEx(key, "MachineGuid")
+            tok = _normalize_machine_token(str(val or ""))
+            if tok:
+                return tok
+        except Exception:
+            pass
+
+    if os_name == "Darwin":
+        try:
+            import re
+            import subprocess
+
+            out = subprocess.check_output(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                text=True,
+                timeout=5,
+                stderr=subprocess.DEVNULL,
+            )
+            m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
+            if m:
+                tok = _normalize_machine_token(m.group(1))
+                if tok:
+                    return tok
+        except Exception:
+            pass
+
     return ""
 
 

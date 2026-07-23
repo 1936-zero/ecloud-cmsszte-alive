@@ -288,7 +288,7 @@ def _start_keepalive_autostart_watchdog(interval: int | None = None):
 
 
 # ---------------------------------------------------------------------------
-# WebUI access-token gate (对标爱家 gate6：无 token = 开放；file > env)
+# WebUI access-token gate (gate6：无 token = 开放；file > env)
 # 文件: data/webui_access_token；环境: ECLOUD_WEBUI_TOKEN
 # 请求头: Authorization Bearer / x-api-token / ?token=
 # ---------------------------------------------------------------------------

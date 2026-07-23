@@ -4,28 +4,29 @@ services:
     image: ecloud-cmsszte-alive:local
     container_name: ecloud-cmsszte-alive
     user: "1000:1000"
-    # CAG mint (cs_suOperDesktop) times out on bridge NAT; host net matches CLI.
-    network_mode: host
+    # Default: bridge + published port — works on Linux / Windows / macOS Docker Desktop.
+    # CAG mint may be slower under NAT; for Linux host-net Path B prefer:
+    #   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
     environment:
       TZ: Asia/Shanghai
       HOME: /tmp
       CLOUD_PC_CONFIG_FILE: /app/data/cloud_pc.json
       # #75fixan P1-1: do NOT set SHORT_CONNECT_PLAIN_FILE here.
-      # Web multi-card uses per-account plain:
-      #   data/web_accounts/<id>/connectstr.plain (+ cloud_pc.json plain_path)
+      # Web multi-card uses per-account plain under data/web_accounts/<id>/.
       # Global env plain is CLI single-account fallback only (serial credential risk).
-      # Optional legacy/oracle dump dir (per-account out_dir still overrides KM):
       OUT_DIR: /tmp/ecloud-pathb/reports/spice_oracle_webui
       # product line pins (never jtydn / aijia)
       PIN_PRODUCT_LINE: public_ecloud_9222
     volumes:
       - ./data:/app/data
-      # installinfo [PublicKey].csap_id required for connectStr mint/decode.
-      # Default: host official CMSS client path (Path B capable). Override:
-      #   INSTALLINFO_HOST=./docker/stubs/installinfo.ini  # HTTP-only / CI
-      # Empty csap_id stub → mint fails: KeyError PublicKey.csap_id (#75fixan)
-      - ${INSTALLINFO_HOST:-/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
-    # host network: NO ports: mapping; process binds host :8081 directly
+      # installinfo [PublicKey].csap_id required for connectStr mint/decode (Path B).
+      # Default: repo stub so compose always starts on Win/Mac/CI (HTTP-only / empty csap_id).
+      # Path B on a machine with official CMSS client:
+      #   INSTALLINFO_HOST=/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini
+      #   (or the real host path) docker compose up -d
+      - ${INSTALLINFO_HOST:-./docker/stubs/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
+    ports:
+      - "8081:8081"
     # ensure ./data is writable by uid 1000 (mkdir -p data && chown 1000:1000 data)
     restart: unless-stopped
     command: ["web", "--host", "0.0.0.0", "--port", "8081"]

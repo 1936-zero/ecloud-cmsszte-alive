@@ -82,7 +82,7 @@
     el.textContent = msg;
   }
 
-  // #75fixr: 爱家式底部 toast 气泡（发码/关键提示用，客户一眼可见）
+  // #75fixr: 底部 toast 气泡（发码/关键提示用，客户一眼可见）
   function toast(msg, isError) {
     var el = $("toast");
     if (!el) return;
@@ -336,7 +336,7 @@
     modal.setAttribute("aria-hidden", "true");
   }
 
-  /** 二次确认（对齐爱家 confirmModal） */
+  /** 二次确认弹窗 */
   function confirmModal(title, body, okText) {
     return new Promise(function (resolve) {
       var modal = $("confirm-modal");
@@ -522,17 +522,12 @@
       var logHtml = "";
       if (logs.length) {
         logHtml = logs.slice(-6).map(function (line) {
-          var t = typeof line === "string" ? line : (line.msg || line.message || JSON.stringify(line));
-          var lv = (typeof line === "object" && line.level) ? String(line.level).toLowerCase() : "info";
-          if (lv.indexOf("err") >= 0) lv = "error";
-          else if (lv.indexOf("warn") >= 0) lv = "warn";
-          else lv = "info";
-          return '<div class="log-line level-' + lv + '">' + esc(String(t)) + "</div>";
+          return formatLogLineHtml(line, "compact");
         }).join("");
       } else {
         logHtml = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
       }
-      /* 对齐爱家 cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
+      /* #75fixap cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
       /* #75fixaf: starting → 禁点「启动中…」；#75fixag: stopping → 「停止中…」 */
       /* #75fixak: 循环仍在跑时只显示停止（可中断）；running=false 才显示启动 */
       var starting = !!(state.startingIds && state.startingIds[acc.id]);
@@ -609,7 +604,7 @@
   }
 
 
-  /* ---- #75fixm 爱家 needFull / applyLogs 防闪 ---- */
+  /* ---- #75fixm needFull / applyLogs 防闪 ---- */
   function accountFingerprint(a) {
     /* #75fixak: API 字段是 last_error/health/last_heart_ok/rounds；旧 k.error 恒空导致 needFull 漏触发 */
     if (!a) return "";
@@ -692,14 +687,27 @@
     return out.slice(-maxN);
   }
 
-  function formatLogLineHtml(line) {
+  /* #75fixap R5: single renderer — mode "full"(global) | "compact"(card preview) */
+  function formatLogLineHtml(line, mode) {
     var t = typeof line === "string" ? line : (line.msg || line.message || line.text || JSON.stringify(line));
     var lv = (typeof line === "object" && (line.level || line.lvl)) ? String(line.level || line.lvl).toLowerCase() : "info";
     if (lv.indexOf("err") >= 0) lv = "error";
     else if (lv.indexOf("warn") >= 0) lv = "warn";
     else lv = "info";
-    var ts = (typeof line === "object" && line.ts) ? String(line.ts) + " " : "";
-    return '<div class="log-line level-' + lv + '">' + esc(ts + String(t)) + "</div>";
+    var full = mode !== "compact";
+    var parts = [];
+    if (full && typeof line === "object" && line && line.ts) parts.push(String(line.ts));
+    if (full && typeof line === "object" && line) {
+      var who = line.label || line.account_id || line.account || "";
+      if (who) parts.push("(" + String(who) + ")");
+    }
+    parts.push(String(t));
+    return '<div class="log-line level-' + lv + '">' + esc(parts.join(" ")) + "</div>";
+  }
+
+  function appendLogLine(box, line, mode) {
+    if (!box) return;
+    box.insertAdjacentHTML("beforeend", formatLogLineHtml(line, mode));
   }
 
   function isLogFullModalOpen() {
@@ -735,7 +743,14 @@
     var src = $("global-log");
     var body = $("log-full-body");
     if (!src || !body) return;
-    body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
+    var next = src.innerHTML || '<div class="log-line">暂无日志</div>';
+    /* #75fixap R4: skip identical full clone (avoids scroll jank every 5s) */
+    if (body.getAttribute("data-log-fp") === String(next.length) && body.innerHTML === next) {
+      scrollLogIfStuck(body, state.logFullStickBottom);
+      return;
+    }
+    body.innerHTML = next;
+    body.setAttribute("data-log-fp", String(next.length));
     /* respect user scroll position when detached */
     scrollLogIfStuck(body, state.logFullStickBottom);
   }
@@ -774,7 +789,9 @@
         if (!logs.length) {
           box.innerHTML = '<div class="log-line level-info">暂无日志 · 双击查看全部</div>';
         } else {
-          box.innerHTML = logs.map(formatLogLineHtml).join("");
+          box.innerHTML = logs.map(function (line) {
+            return formatLogLineHtml(line, "compact");
+          }).join("");
         }
       }
     }
@@ -838,22 +855,26 @@
     });
   }
 
-  function softPollAccounts() {
+  /* #75fixap R8: name matches duty — poll card list only (not global log / not full modal) */
+  function pollAccountCards() {
     return loadAccounts(false);
   }
+  /* back-compat alias */
+  var softPollAccounts = pollAccountCards;
 
   /* #75fixal: after start/stop, burst-poll so red-card/button catches up faster than 5s tick */
-  function softPollBurst(times, gapMs) {
+  function pollAccountCardsBurst(times, gapMs) {
     times = times || 4;
     gapMs = gapMs || 700;
     var n = 0;
     function tick() {
-      softPollAccounts();
+      pollAccountCards();
       n += 1;
       if (n < times) setTimeout(tick, gapMs);
     }
     tick();
   }
+  var softPollBurst = pollAccountCardsBurst;
 
   // #75fixr: 仅当表单账号与 current 卡 username 一致时复用；否则新建第二张卡
   // （旧逻辑无脑复用 currentId，导致第二账号登录覆盖第一张卡）
@@ -1250,32 +1271,27 @@
     var q = force ? 0 : state.globalSince;
     return api("GET", "/api/global-logs?since=" + q).then(function (res) {
       var logs = res.logs || [];
+      var box = $("global-log");
+      if (!box) return;
       if (!logs.length && !force) {
-        /* still keep open global modal in sync after clear */
-        syncGlobalLogModalBody();
+        /* #75fixap R4: no new lines — do not full-clone modal */
         return;
       }
-      var box = $("global-log");
+      var changed = !!force || logs.length > 0;
       if (force) box.innerHTML = "";
       logs.forEach(function (e) {
         // backend uses gseq for global_logs; per-account uses seq
         var gs = e.gseq != null ? e.gseq : (e.seq != null ? e.seq : e.id);
         if (gs != null && gs > state.globalSince) state.globalSince = gs;
-        var line = document.createElement("div");
-        line.className = "log-line level-" + String(e.level || "INFO").toLowerCase();
-        var who = e.label || e.account_id || e.account || "";
-        line.textContent =
-          "[" + (e.level || "INFO") + "] " + (e.ts || "") +
-          (who ? " (" + who + ")" : "") + " " + (e.msg || e.message || "");
-        box.appendChild(line);
+        appendLogLine(box, e);
       });
       // cap DOM
       while (box.children.length > 300) box.removeChild(box.firstChild);
       /* #75fixao: only stick when user is near bottom; force refresh re-attaches */
       if (force) state.globalStickBottom = true;
       scrollLogIfStuck(box, state.globalStickBottom);
-      /* #75fixaa: 运行日志弹窗打开时跟随，但尊重 stick 闸 */
-      syncGlobalLogModalBody();
+      /* #75fixap R4: sync full modal only when bar actually changed */
+      if (changed) syncGlobalLogModalBody();
     }).catch(function () { /* ignore poll errors */ });
   }
 
@@ -1309,7 +1325,7 @@
     $("help-modal").classList.add("hidden");
   };
 
-  // 对齐爱家：双击全局日志 → 全量弹窗
+  // 双击全局日志 → 全量弹窗
   function openLogFull() {
     var src = $("global-log");
     var body = $("log-full-body");
@@ -1321,7 +1337,8 @@
     var title = $("log-full-title");
     if (title) title.textContent = "运行日志";
     body.innerHTML = src.innerHTML || '<div class="log-line">暂无日志</div>';
-    // HARD_GATE 对齐爱家：强制可见 + 高 z-index 压过 toast/其它 modal
+    body.setAttribute("data-log-fp", String(body.innerHTML.length));
+    // HARD_GATE：强制可见 + 高 z-index 压过 toast/其它 modal
     modal.classList.remove("hidden", "is-hidden");
     modal.classList.add("open", "is-open");
     modal.removeAttribute("hidden");
@@ -1363,7 +1380,7 @@
         state.globalStickBottom = isNearBottom(g);
       }, { passive: true });
     }
-    // 完整日志按钮已删；对齐爱家：双击运行日志打开二级页
+    // 完整日志按钮已删；双击运行日志打开二级页
     var closeBtn = $("log-full-close");
     if (closeBtn) closeBtn.addEventListener("click", closeLogFull);
     var modal = $("log-full-modal");
@@ -1635,7 +1652,7 @@
     if (setupShow && setupInput) setupShow.onclick = function () {
       var show = setupInput.type === "password";
       setupInput.type = show ? "text" : "password";
-      // 门控与爱家一致：长文案「显示密钥/隐藏密钥」（token-modal 仍用短文案）
+      // 门控长文案「显示密钥/隐藏密钥」（token-modal 仍用短文案）
       setupShow.textContent = show ? "隐藏密钥" : "显示密钥";
       setupShow.setAttribute("aria-pressed", show ? "true" : "false");
       setupShow.setAttribute("aria-label", show ? "隐藏密钥" : "显示密钥");

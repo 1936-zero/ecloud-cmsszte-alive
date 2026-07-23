@@ -205,7 +205,7 @@ def register_account_routes(app: Flask) -> None:
 
     @app.route("/api/accounts/<account_id>/logs", methods=["DELETE"])
     def api_accounts_logs_clear(account_id: str):
-        """Clear per-account backend log ring (爱家 clear-logs 真源)."""
+        """Clear per-account backend log ring (backend real clear)."""
         acc, err = _acc_or_404(account_id)
         if err:
             return err

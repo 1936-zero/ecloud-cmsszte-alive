@@ -31,16 +31,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _resolve_default_plain() -> str:
-    """Prefer env → existing files → first writable candidate (Docker-safe)."""
+    """Prefer env → existing files → first writable candidate (Win/Mac/Docker-safe)."""
+    import tempfile
+
     for env_key in ("SHORT_CONNECT_PLAIN_FILE", "PLAIN", "ECLOUD_PLAIN"):
         v = (os.environ.get(env_key) or "").strip()
         if v:
             return v
+    tmp = Path(tempfile.gettempdir())
     candidates = [
-        Path("/tmp/r26_t29_plain"),
-        Path("/tmp/ecloud-pathb/connectstr.plain"),
+        tmp / "ecloud-pathb" / "connectstr.plain",
+        tmp / "r26_t29_plain",
         _REPO_ROOT / "data" / "connectstr.plain",
-        Path.home() / ".cache/ecloud-pathb/connectstr.plain",
+        Path.home() / ".cache" / "ecloud-pathb" / "connectstr.plain",
     ]
     for c in candidates:
         try:
@@ -55,7 +58,7 @@ def _resolve_default_plain() -> str:
                 return str(c)
         except OSError:
             continue
-    return "/tmp/ecloud-pathb/connectstr.plain"
+    return str(tmp / "ecloud-pathb" / "connectstr.plain")
 
 
 _DEFAULT_PLAIN = _resolve_default_plain()
@@ -72,7 +75,9 @@ _CONFIG_FILE = Path(
 
 
 def _resolve_out_dir() -> Path:
-    """Docker-safe soak/report dir (repo reports/ often not writable as uid 1000)."""
+    """Docker/Win/Mac-safe soak/report dir (repo reports/ often not writable as uid 1000)."""
+    import tempfile
+
     for env_key in ("OUT_DIR", "SPICE_ORACLE_OUT_DIR", "PATH_B_OUT_DIR"):
         v = (os.environ.get(env_key) or "").strip()
         if not v:
@@ -84,10 +89,11 @@ def _resolve_out_dir() -> Path:
                 return p
         except OSError:
             continue
+    tmp = Path(tempfile.gettempdir())
     candidates = [
         _REPO_ROOT / "reports" / "r26_live" / "spice_oracle_webui",
-        Path("/tmp/ecloud-pathb/reports/spice_oracle_webui"),
-        Path("/tmp/spice_oracle_webui"),
+        tmp / "ecloud-pathb" / "reports" / "spice_oracle_webui",
+        tmp / "spice_oracle_webui",
     ]
     for c in candidates:
         try:
@@ -96,7 +102,7 @@ def _resolve_out_dir() -> Path:
                 return c
         except OSError:
             continue
-    return Path("/tmp/spice_oracle_webui")
+    return tmp / "spice_oracle_webui"
 
 
 def _load_cfg() -> dict:

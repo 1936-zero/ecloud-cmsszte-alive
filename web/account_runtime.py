@@ -385,8 +385,8 @@ class AccountRuntime:
     def _is_keepalive_round_tick(msg: str) -> bool:
         """Per-round success ticks belong on the card only.
 
-        Align 爱家 bottom「运行日志」: lifecycle / status / failures only,
-        NOT every Path B heart or 账号保活 success round.
+        Bottom「运行日志」: lifecycle / status / failures only,
+        NOT every Path B heart or 账号保活 success round. (#75fixao/#75fixap)
         """
         s = str(msg or "")
         # [n] Path B 成功 heart=... / status=...
@@ -1151,24 +1151,23 @@ class AccountRuntime:
         if not ok:
             return {"ok": False, "error": "该账号保活已在运行"}
         label = "Path B" if mode == "path_b" else "HTTP"
-        # #75fixao: user-facing start summary → bottom 运行日志
+        # #75fixap R3: one global lifecycle line; AKA nested log stays card-only
+        aka_res = self.start_account_keepalive(to_global=False)
+        aka_note = ""
+        if not aka_res.get("ok"):
+            err = str(aka_res.get("error") or "")
+            if "已在运行" not in err and "already" not in err.lower():
+                aka_note = f"；账号保活未自动启动: {err or aka_res}"
+            else:
+                aka_note = "；账号登录态保活已在运行"
+        else:
+            aka_note = "；已自动启动账号登录态保活"
         self.log(
             "INFO",
             f"已启动 {label} 保活 interval={interval}s instance={instance_id[:20]} "
-            f"mode={mode} origin={origin_u or '?'}",
+            f"mode={mode} origin={origin_u or '?'}{aka_note}",
             to_global=True,
         )
-        # Align CLI: starting desktop keepalive also starts account login-state keepalive
-        aka_res = self.start_account_keepalive()
-        if not aka_res.get("ok"):
-            # already running is fine; other errors only warn
-            err = str(aka_res.get("error") or "")
-            if "已在运行" not in err and "already" not in err.lower():
-                self.log("WARN", f"桌面保活已启，账号保活未自动启动: {err or aka_res}", to_global=True)
-            else:
-                self.log("INFO", "账号登录态保活已在运行", to_global=True)
-        else:
-            self.log("INFO", "已自动启动账号登录态保活（对齐 CLI）", to_global=True)
         return {
             "ok": True,
             "instance_id": instance_id,
@@ -1183,17 +1182,14 @@ class AccountRuntime:
         with self._lock:
             self._ka_starting = False
         ok = self.km.stop()
-        # #75fixao: user stop summary → bottom 运行日志
+        # stop desktop also stops AKA; nest card-only then one global line
+        aka_ok = self.stop_account_keepalive(to_global=False)
+        aka_ok_flag = aka_ok.get("ok") if isinstance(aka_ok, dict) else aka_ok
+        # #75fixap R3: single global stop line
+        desk = "已请求停止桌面保活" if ok else "桌面保活未在运行"
         self.log(
             "INFO",
-            "已请求停止 Path B 保活" if ok else "保活未在运行",
-            to_global=True,
-        )
-        # Align CLI: stop desktop keepalive also stops account login-state keepalive
-        aka_ok = self.stop_account_keepalive()
-        self.log(
-            "INFO",
-            f"已同步停止账号登录态保活 ok={aka_ok.get('ok') if isinstance(aka_ok, dict) else aka_ok}",
+            f"{desk}；已同步停止账号登录态保活 ok={aka_ok_flag}",
             to_global=True,
         )
         return {"ok": True if ok is not None else True, "stopped": bool(ok), "account_keepalive_stopped": aka_ok}
@@ -1224,8 +1220,14 @@ class AccountRuntime:
             self.log("WARN", f"登录后自动启动账号保活异常: {e}")
             return {"ok": False, "error": str(e)}
 
-    def start_account_keepalive(self, interval: int | None = None) -> dict:
-        """Start L1 account login-state keepalive (CLI `python main.py keepalive`)."""
+    def start_account_keepalive(
+        self, interval: int | None = None, *, to_global: bool = True
+    ) -> dict:
+        """Start L1 account login-state keepalive (CLI `python main.py keepalive`).
+
+        to_global=False when nested under desktop start_keepalive (#75fixap R3)
+        so bottom 运行日志 only gets the combined lifecycle line.
+        """
         if not self._cfg.get("access_token"):
             return {"ok": False, "error": "未登录，无法启动账号保活"}
         try:
@@ -1255,16 +1257,19 @@ class AccountRuntime:
             self._cfg["account_keepalive_interval"] = interval
             self._cfg["updated_at"] = _now_iso()
             self._save_cfg()
-        # user/lifecycle summary (also called from start_keepalive path)
-        self.log("INFO", f"已启动账号登录态保活 interval={interval}s", to_global=True)
+        self.log(
+            "INFO",
+            f"已启动账号登录态保活 interval={interval}s",
+            to_global=to_global,
+        )
         return {"ok": True, "interval": interval}
 
-    def stop_account_keepalive(self) -> dict:
+    def stop_account_keepalive(self, *, to_global: bool = True) -> dict:
         ok = self.aka.stop()
         self.log(
             "INFO",
             "已请求停止账号登录态保活" if ok else "账号保活未在运行",
-            to_global=True,
+            to_global=to_global,
         )
         return {"ok": ok}
 

@@ -21,22 +21,29 @@ try:
 except ImportError:  # pragma: no cover
     from Cryptodome.Cipher import AES
 
-DEFAULT_INI_CANDIDATES = [
-    Path("/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini"),
-    Path("/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/ZTE/config/installinfo.ini"),
-    # Docker / data volume fallback (minimal [PublicKey] csap_id)
-    Path("/app/data/config/installinfo.ini"),
-    Path(__file__).resolve().parent.parent / "data" / "config" / "installinfo.ini",
-]
+try:
+    from l3.platform_paths import installinfo_candidates
+except ImportError:  # pragma: no cover — flat script cwd
+    from platform_paths import installinfo_candidates  # type: ignore
+
+# Kept as name for callers/tests; rebuilt each access so env overrides apply.
+def _default_ini_candidates() -> list[Path]:
+    return installinfo_candidates()
+
+
+DEFAULT_INI_CANDIDATES = _default_ini_candidates()
+
 
 def parse_installinfo(path: Path | None = None) -> dict:
     if path is None:
-        for p in DEFAULT_INI_CANDIDATES:
+        for p in installinfo_candidates():
             if p.exists():
                 path = p
                 break
     if path is None or not Path(path).exists():
-        raise FileNotFoundError("installinfo.ini not found")
+        raise FileNotFoundError(
+            "installinfo.ini not found (set INSTALLINFO_PATH or place under data/config/)"
+        )
     sec = None
     out: dict[str, dict[str, str]] = {}
     for ln in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
