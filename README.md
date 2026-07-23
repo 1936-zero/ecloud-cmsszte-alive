@@ -216,8 +216,8 @@ docker compose up -d --build
 - **Linux 可选 host 网络**（CAG mint / Path B 更接近 CLI）：  
   `docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build`  
   Windows / macOS **不要**用 host override（Docker Desktop 上 host 网不等于 Linux host）。
-- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**（空 `csap_id`），保证无官方客户端时也能启动 WebUI（HTTP-only；Path B mint 会失败并提示缺密钥）。  
-  本机已装官方 CMSS 客户端、需要 Path B 时：  
+- 默认挂载仓库内 **`./docker/stubs/installinfo.ini`**，内含客户端产品密钥 **`PublicKey.csap_id`**（16 字节 AES，非账号密码），**无官方客户端时 Docker WebUI 也可做 Path B mint/decode**。  
+  若要用本机官方 ini 覆盖：  
   `INSTALLINFO_HOST=/path/to/real/installinfo.ini docker compose up -d`  
   （Linux 官方路径示例：`/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini`）
 - 容器 `user: "1000:1000"`：请保证 `./data` 对该 uid 可写（`mkdir -p data && sudo chown -R 1000:1000 data`；Docker Desktop 上通常只需 `mkdir -p data`）。

@@ -1,7 +1,8 @@
-"""Cross-platform temp + installinfo path helpers (#75fixap).
+"""Cross-platform temp + installinfo path helpers (#75fixap / #75fixaq).
 
 Win/Mac/Linux: never assume POSIX /tmp or only Linux CMSS install tree.
-Path B mint still needs a real installinfo.ini (csap_id); stub/empty is HTTP-only.
+Path B mint needs PublicKey.csap_id (16-char product AES key). Default Docker
+stub ships the known client csap_id; empty mounts are skipped by get_csap_key.
 """
 from __future__ import annotations
 
@@ -69,7 +70,7 @@ def installinfo_candidates() -> list[Path]:
     ):
         _add(mac_as / rel)
 
-    # Docker volume + repo data (HTTP-only stub often lives here)
+    # Docker volume + repo data / portable stub (product csap_id; empty files skipped by get_csap_key)
     _add("/app/data/config/installinfo.ini")
     _add(_REPO_ROOT / "data" / "config" / "installinfo.ini")
     _add(_REPO_ROOT / "docker" / "stubs" / "installinfo.ini")

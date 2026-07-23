@@ -20,10 +20,10 @@ services:
     volumes:
       - ./data:/app/data
       # installinfo [PublicKey].csap_id required for connectStr mint/decode (Path B).
-      # Default: repo stub so compose always starts on Win/Mac/CI (HTTP-only / empty csap_id).
-      # Path B on a machine with official CMSS client:
+      # Default: repo stub with product csap_id (same key as official client PublicKey).
+      # Override with host official ini if needed:
       #   INSTALLINFO_HOST=/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini
-      #   (or the real host path) docker compose up -d
+      #   docker compose up -d
       - ${INSTALLINFO_HOST:-./docker/stubs/installinfo.ini}:/opt/apps/com.cmss.saas.ecloudcomputer/files/drivers/CMSS/config/installinfo.ini:ro
     ports:
       - "8081:8081"

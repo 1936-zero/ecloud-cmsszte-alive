@@ -35,6 +35,8 @@ DEFAULT_INI_CANDIDATES = _default_ini_candidates()
 
 
 def parse_installinfo(path: Path | None = None) -> dict:
+    """Parse one installinfo.ini. If path is None, first *existing* candidate wins
+    (may still have empty csap_id — use get_csap_key for skip-empty)."""
     if path is None:
         for p in installinfo_candidates():
             if p.exists():
@@ -60,15 +62,45 @@ def parse_installinfo(path: Path | None = None) -> dict:
     return out
 
 def get_csap_key(ini_path: Path | None = None) -> bytes:
-    """ReadStringFromConfigFile("PublicKey","csap_id",...,"../config/installinfo.ini",0,1)"""
-    cfg = parse_installinfo(ini_path)
-    key = cfg.get("PublicKey", {}).get("csap_id")
-    if not key:
-        raise KeyError("PublicKey.csap_id missing in installinfo.ini")
-    kb = key.encode("utf-8")
-    if len(kb) != 16:
-        raise ValueError(f"csap_id must be 16 bytes for AES-128, got {len(kb)}: {key!r}")
-    return kb
+    """ReadStringFromConfigFile("PublicKey","csap_id",...,"../config/installinfo.ini",0,1).
+
+    When ini_path is None: walk installinfo_candidates() and skip files that exist
+    but have empty/missing/wrong-length csap_id (empty Docker stub must not block
+    a later data/config or official client key).
+    """
+    if ini_path is not None:
+        cfg = parse_installinfo(ini_path)
+        key = (cfg.get("PublicKey") or {}).get("csap_id") or ""
+        if not key:
+            raise KeyError(f"PublicKey.csap_id missing in {ini_path}")
+        kb = key.encode("utf-8")
+        if len(kb) != 16:
+            raise ValueError(f"csap_id must be 16 bytes for AES-128, got {len(kb)}: {key!r}")
+        return kb
+
+    tried: list[str] = []
+    for p in installinfo_candidates():
+        if not p.exists():
+            continue
+        try:
+            cfg = parse_installinfo(p)
+        except Exception as e:
+            tried.append(f"{p}:parse:{type(e).__name__}")
+            continue
+        key = (cfg.get("PublicKey") or {}).get("csap_id") or ""
+        if not key:
+            tried.append(f"{p}:empty")
+            continue
+        kb = key.encode("utf-8")
+        if len(kb) != 16:
+            tried.append(f"{p}:len={len(kb)}")
+            continue
+        return kb
+    raise KeyError(
+        "PublicKey.csap_id missing/empty in all installinfo candidates"
+        + (f" tried={tried}" if tried else " (no file found)")
+        + "; set INSTALLINFO_PATH or mount real/stub with 16-char csap_id"
+    )
 
 def hex_to_bytes(hex_str: str) -> bytes:
     h = re.sub(r"[^0-9a-fA-F]", "", hex_str or "")
