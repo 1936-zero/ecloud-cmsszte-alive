@@ -211,8 +211,8 @@ def path_b_connect(
     host: str,
     *,
     plain_file: Path,
-    tmpl_pre: Path = Path("/tmp/t14_100"),
-    tmpl_post: Path = Path("/tmp/t14_tls_plain"),
+    tmpl_pre: Path | None = None,
+    tmpl_post: Path | None = None,
     cag_port: int = 8899,
     continue_channels: bool = True,
     heart_listen_s: float = 0.0,
@@ -238,6 +238,15 @@ def path_b_connect(
     # T40: RSA2048 SPKI ct=256 ≠ 128B slot; zeros+random both LIVE-channel.
     if ticket_mode not in ("template", "zeros", "random"):
         return PathBResult(host=host, error=f"bad ticket_mode={ticket_mode}")
+
+    # issue#1: cross-platform defaults (assets/templates, never bare /tmp on Windows)
+    if tmpl_pre is None or tmpl_post is None:
+        from l3.platform_paths import DEFAULT_POST, DEFAULT_PRE
+
+        if tmpl_pre is None:
+            tmpl_pre = Path(DEFAULT_PRE)
+        if tmpl_post is None:
+            tmpl_post = Path(DEFAULT_POST)
 
     pkts = build_packets_from_templates(
         tmpl_pre=tmpl_pre, tmpl_post=tmpl_post, hv6=hv6, vmid=vmid, k=k, port=port, sport=sport
@@ -548,11 +557,17 @@ def main() -> int:
     import json
     from datetime import datetime
 
+    from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
+
     ap = argparse.ArgumentParser(description="path_B CAG post-TLS REDQ+HEART LIVE (claim=false)")
     ap.add_argument("--host", default=os.environ.get("CAG_HOST", "36.212.224.105"))
-    ap.add_argument("--plain", default=os.environ.get("SHORT_CONNECT_PLAIN_FILE", "/tmp/r26_t29_plain"))
-    ap.add_argument("--pre", default="/tmp/t14_100")
-    ap.add_argument("--post", default="/tmp/t14_tls_plain")
+    ap.add_argument(
+        "--plain",
+        default=os.environ.get("SHORT_CONNECT_PLAIN_FILE") or DEFAULT_PLAIN,
+        help="connectStr plain path (default: OS temp/ecloud-pathb or SHORT_CONNECT_PLAIN_FILE)",
+    )
+    ap.add_argument("--pre", default=DEFAULT_PRE, help="pre-TLS template dir")
+    ap.add_argument("--post", default=DEFAULT_POST, help="post-TLS template dir")
     ap.add_argument("--out", default="")
     ap.add_argument(
         "--heart-listen",

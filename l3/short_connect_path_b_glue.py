@@ -45,7 +45,9 @@ AGENT_DUAL_OK = False
 # Default CAG plane (path_B stock)
 DEFAULT_CAG_HOST = "36.212.224.105"
 DEFAULT_CAG_PORT = 8899
-DEFAULT_PLAIN = os.environ.get("SHORT_CONNECT_PLAIN_FILE", "/tmp/r26_t29_plain")
+from l3.platform_paths import resolve_default_plain  # noqa: E402
+
+DEFAULT_PLAIN = resolve_default_plain()
 
 # Route labels
 ROUTE_PATH_B_CAG = "path_b_cag_keepalive"

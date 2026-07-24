@@ -20,17 +20,15 @@ log = logging.getLogger(__name__)
 
 PRODUCTION_CLAIM = False
 PIN_PRODUCT_LINE = "public_ecloud_9222"
-DEFAULT_PLAIN = os.environ.get(
-    "SHORT_CONNECT_PLAIN_FILE",
-    str(Path.home() / ".cache/ecloud-pathb/connectstr.plain"),
+# Cross-platform defaults (Win/Mac/Linux; issue#1 — no bare /tmp)
+from l3.platform_paths import (  # noqa: E402
+    DEFAULT_PLAIN,
+    DEFAULT_POST,
+    DEFAULT_PRE,
+    _NEST_POST,
+    _NEST_PRE,
 )
-# Durable templates shipped under assets/ (restored by bin restore-templates)
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PRE = str(_REPO_ROOT / "assets/templates/pre")
-DEFAULT_POST = str(_REPO_ROOT / "assets/templates/post")
-# Fallback nest capture if assets missing
-_NEST_PRE = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/pre"
-_NEST_POST = _REPO_ROOT / "reports/r26_live/capture/t14_frame_templates_restored/post"
 # #75fixw/#75fixad: after operate=available wait before mint (SaaS running ≠ CAG ready)
 # Cold boot often needs >15s; default 60. Override with CLOUD_PC_POWER_WAIT.
 DEFAULT_POWER_WAIT_S = float(os.environ.get("CLOUD_PC_POWER_WAIT", "60") or 60)

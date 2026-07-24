@@ -37,9 +37,15 @@ DEFAULT_CAG_HOST = "36.212.224.105"
 DEFAULT_CAG_PORT = 8899
 DEFAULT_TICKET_MODE = "zeros"
 DEFAULT_HEART_LISTEN_S = 35.0
-DEFAULT_PLAIN = os.environ.get("SHORT_CONNECT_PLAIN_FILE", "/tmp/r26_t29_plain")
-DEFAULT_PRE = "/tmp/t14_100"
-DEFAULT_POST = "/tmp/t14_tls_plain"
+from l3.platform_paths import (  # noqa: E402
+    DEFAULT_PLAIN as _PP_PLAIN,
+    DEFAULT_POST as _PP_POST,
+    DEFAULT_PRE as _PP_PRE,
+)
+
+DEFAULT_PLAIN = os.environ.get("SHORT_CONNECT_PLAIN_FILE") or _PP_PLAIN
+DEFAULT_PRE = os.environ.get("PATH_B_TMPL_PRE") or _PP_PRE
+DEFAULT_POST = os.environ.get("PATH_B_TMPL_POST") or _PP_POST
 
 # HEART dual types (vendor wrap 0a01)
 TYPE_HEART_S2C = 0x74

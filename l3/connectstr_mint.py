@@ -61,9 +61,9 @@ DEFAULT_CAG_HOST = "36.212.224.105"
 DEFAULT_CAG_PORT = 8899
 DEFAULT_CSAPIP = "192.168.1.200:30087"
 DEFAULT_OP_TYPE = 3
-DEFAULT_PLAIN_PATH = Path(
-    os.environ.get("SHORT_CONNECT_PLAIN_FILE", "/tmp/r26_t29_plain")
-)
+from l3.platform_paths import resolve_default_plain  # noqa: E402
+
+DEFAULT_PLAIN_PATH = Path(resolve_default_plain())
 DEFAULT_CLOUD_PC = _REPO / "cloud_pc.json"
 FREEZE_CITE = "a46d55cd523da9fd"
 PRODUCTION_CLAIM = False

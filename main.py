@@ -278,24 +278,60 @@ def _run_spice_oracle_entry(args, cfg, client, relogin_fn):
     """Shared entry: SPICE path_B HEART + status/uptime oracle (claim=false)."""
     from pathlib import Path
 
+    from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
+    from l3.product_setup import run_product_setup
     from l3.spice_oracle_keepalive_loop import run_spice_oracle_keepalive_loop
 
     # #75fixaj: resolver now returns (instance_id, machine_id, origin)
     instance_id, machine_id, _origin = _resolve_desktop_for_spice(
         args, cfg, client, relogin_fn
     )
-    plain = Path(getattr(args, "plain", "") or "/tmp/r26_t29_plain")
-    if not plain.is_file():
-        log.error(
-            "SPICE plain missing at %s (not logging contents). "
-            "Need connectStr plain for path_B; set --plain or SHORT_CONNECT_PLAIN_FILE.",
+    # issue#1: cross-platform defaults (no bare /tmp on Windows)
+    plain = Path(getattr(args, "plain", "") or cfg.get("plain_path") or DEFAULT_PLAIN)
+    if not plain.is_file() or plain.stat().st_size <= 0:
+        # Align with WebUI: auto mint via product_setup when plain missing
+        log.info(
+            "SPICE plain missing at %s → auto mint via product_setup (issue#1)",
             plain,
         )
-        sys.exit(1)
+        try:
+            mint_result = run_product_setup(
+                cfg=cfg,
+                client=client,
+                save_config=save_config,
+                plain_path=plain,
+                do_power=True,
+                force_power=False,
+                do_mint=True,
+                do_path_b=False,
+                instance_id=instance_id or str(cfg.get("instance_id") or ""),
+                machine_id=machine_id or str(cfg.get("machine_id") or ""),
+            )
+            cfg = load_config()  # reload after mint may update gateway
+            if not (plain.is_file() and plain.stat().st_size > 0):
+                log.error(
+                    "SPICE plain still missing after auto-mint at %s "
+                    "(stage=%s err=%s). Run: python3 main.py setup "
+                    "or set --plain / SHORT_CONNECT_PLAIN_FILE.",
+                    plain,
+                    getattr(mint_result, "stage", ""),
+                    getattr(mint_result, "error", ""),
+                )
+                sys.exit(1)
+            log.info("SPICE plain minted ok stage=%s", getattr(mint_result, "stage", ""))
+        except Exception as e:
+            log.error(
+                "SPICE plain auto-mint failed at %s: %s:%s. "
+                "Run: python3 main.py setup or set --plain.",
+                plain,
+                type(e).__name__,
+                e,
+            )
+            sys.exit(1)
 
     host = getattr(args, "host", None) or "36.212.224.105"
-    pre = Path(getattr(args, "pre", None) or "/tmp/t14_100")
-    post = Path(getattr(args, "post", None) or "/tmp/t14_tls_plain")
+    pre = Path(getattr(args, "pre", None) or DEFAULT_PRE)
+    post = Path(getattr(args, "post", None) or DEFAULT_POST)
     out_dir = Path(
         getattr(args, "out_dir", None)
         or "reports/r26_live/spice_oracle_soak"
@@ -485,11 +521,16 @@ def cmd_path_b_keepalive(args):
     """
     from pathlib import Path
 
+    from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
     from l3.path_b_keepalive_loop import run_path_b_keepalive_loop
 
-    plain = Path(getattr(args, "plain", "") or "/tmp/r26_t29_plain")
+    plain = Path(getattr(args, "plain", "") or DEFAULT_PLAIN)
     if not plain.is_file():
-        log.error("path-b-keepalive: plain missing at %s (not logging contents)", plain)
+        log.error(
+            "path-b-keepalive: plain missing at %s (not logging contents). "
+            "Run: python3 main.py setup  (or set --plain / SHORT_CONNECT_PLAIN_FILE)",
+            plain,
+        )
         sys.exit(1)
 
     session_nudge = None
@@ -502,8 +543,8 @@ def cmd_path_b_keepalive(args):
     finished = run_path_b_keepalive_loop(
         host=str(getattr(args, "host", "") or "36.212.224.105"),
         plain=plain,
-        pre=Path(getattr(args, "pre", "") or "/tmp/t14_100"),
-        post=Path(getattr(args, "post", "") or "/tmp/t14_tls_plain"),
+        pre=Path(getattr(args, "pre", "") or DEFAULT_PRE),
+        post=Path(getattr(args, "post", "") or DEFAULT_POST),
         heart_listen=float(getattr(args, "heart_listen", 60.0) or 60.0),
         ticket_mode=str(getattr(args, "ticket_mode", "zeros") or "zeros"),
         session_nudge=session_nudge,
@@ -1096,12 +1137,15 @@ def _add_shared_path_b_loop_args(ap, *, out_dir_default: str, with_account_ping:
                     help="interval seconds (default 300)")
     ap.add_argument("--rounds", type=int, default=None,
                     help="max rounds (default unlimited; 312≈26h @300s)")
+    from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
+
     ap.add_argument("--host", default="36.212.224.105",
                     help="CAG host (public only; default 36.212.224.105)")
-    ap.add_argument("--plain", default="/tmp/r26_t29_plain",
-                    help="connectStr plain path (contents never logged)")
-    ap.add_argument("--pre", default="/tmp/t14_100", help="pre-TLS template dir")
-    ap.add_argument("--post", default="/tmp/t14_tls_plain", help="post-TLS template dir")
+    ap.add_argument("--plain", default=DEFAULT_PLAIN,
+                    help="connectStr plain path (contents never logged; "
+                         "default: OS temp/ecloud-pathb or SHORT_CONNECT_PLAIN_FILE)")
+    ap.add_argument("--pre", default=DEFAULT_PRE, help="pre-TLS template dir")
+    ap.add_argument("--post", default=DEFAULT_POST, help="post-TLS template dir")
     ap.add_argument("--heart-listen", type=float, default=60.0,
                     help="per-round HEART listen window seconds (default 60)")
     ap.add_argument("--ticket-mode", default="zeros",
@@ -1185,12 +1229,15 @@ def main():
         "--host", default="36.212.224.105",
         help="CAG host (default 36.212.224.105; public path)",
     )
+    from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
+
     pbk.add_argument(
-        "--plain", default="/tmp/r26_t29_plain",
-        help="path to connectStr plain file (not logged)",
+        "--plain", default=DEFAULT_PLAIN,
+        help="path to connectStr plain file (not logged; "
+             "default: OS temp/ecloud-pathb or SHORT_CONNECT_PLAIN_FILE)",
     )
-    pbk.add_argument("--pre", default="/tmp/t14_100", help="pre-TLS template dir")
-    pbk.add_argument("--post", default="/tmp/t14_tls_plain", help="post-TLS template dir")
+    pbk.add_argument("--pre", default=DEFAULT_PRE, help="pre-TLS template dir")
+    pbk.add_argument("--post", default=DEFAULT_POST, help="post-TLS template dir")
     pbk.add_argument(
         "--ticket-mode", default="zeros",
         help="ticket mode (default zeros; claim=false)",

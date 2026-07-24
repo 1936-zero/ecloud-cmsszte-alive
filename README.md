@@ -116,25 +116,31 @@ python3 main.py desktop-keepalive
 ```powershell
 git clone https://github.com/1936-zero/ecloud-cmsszte-alive.git
 cd ecloud-cmsszte-alive
-python3 -m pip install -r requirements.txt --user
+python -m pip install -r requirements.txt --user
 ```
 
 **② 登录与保活（逐条执行）：**
 
 ```powershell
-python3 main.py login
-python3 main.py list-desktops      # 可选
-python3 main.py select-desktop
-python3 main.py desktop-keepalive
+python main.py login
+python main.py list-desktops      # 可选
+python main.py select-desktop
+python main.py desktop-keepalive
 ```
 
-若提示找不到 `python3`，把上面的 `python3` 全部换成 `python`。
+若本机只有 `python3` 命令，把上面的 `python` 全部换成 `python3`。
+
+**Windows 路径说明（issue #1）：**
+- 会话凭证默认写在系统临时目录：`%TEMP%\ecloud-pathb\connectstr.plain`（**不是** Linux 的 `/tmp/...`，也不是 `C:\tmp\...`）。
+- Path B 帧模板默认用仓库内 `assets\templates\pre` 与 `assets\templates\post`（clone 即有，无需手动准备）。
+- `desktop-keepalive` / `keepalive` 在凭证文件缺失时会**自动 mint**（与 WebUI 同序：开机 → 签发 → Path B）；也可先跑 `python main.py setup`。
+- 如需自定义凭证路径：`$env:SHORT_CONNECT_PLAIN_FILE="D:\path\connectstr.plain"` 或 `python main.py desktop-keepalive --plain D:\path\connectstr.plain`。
 
 **命令含义（按顺序）：**
 
 1. `login`：终端交互——账号、密码；若要短信，再输入**短信验证码**（不是用短信当密码；半角数字）
 2. `list-desktops` / `select-desktop`：看有几台、选一台（回车默认 0）
-3. `setup`：**可选**；需要时开机 + 准备连接（保活命令已内置 power-first，多数情况可跳过）
+3. `setup`：**可选**；需要时开机 + 准备连接（保活命令已内置 power-first + 缺凭证自动 mint，多数情况可跳过）
 4. `desktop-keepalive` / `keepalive`：前台保活；停止按 `Ctrl+C`
 
 **保活怎么走（CLI / WebUI 同序）：**

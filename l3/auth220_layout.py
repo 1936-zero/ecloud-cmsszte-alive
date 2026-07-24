@@ -74,7 +74,9 @@ T14_BLOB128_SHA16 = "4612a09e631c2037"
 T14_FLAG_U32 = 1
 T14_ACK36_U32_0 = 200  # first u32 of f25_S2C_36.bin
 
-DEFAULT_TMPL_PRE = Path(os.environ.get("PATH_B_TMPL_PRE", "/tmp/t14_100"))
+from l3.platform_paths import default_pre  # noqa: E402
+
+DEFAULT_TMPL_PRE = Path(os.environ.get("PATH_B_TMPL_PRE") or default_pre())
 DEFAULT_TMPL_NAME = "f23_C2S_220.bin"
 
 
@@ -314,7 +316,12 @@ def selfcheck(tmpl_pre: Path = DEFAULT_TMPL_PRE) -> Dict[str, Any]:
     add("policy_auth_fail_blob", d2.blob_recapture and d2.plain_refresh, d2.as_public_dict())
 
     # k not in template (without reading plain file if absent)
-    plain_path = Path(os.environ.get("SHORT_CONNECT_PLAIN_FILE", "/tmp/r26_t29_plain"))
+    # issue#1: never bare /tmp on Windows
+    try:
+        from l3.platform_paths import DEFAULT_PLAIN as _DEFAULT_PLAIN
+    except Exception:
+        _DEFAULT_PLAIN = str(Path(os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp") / "ecloud-pathb" / "connectstr.plain")
+    plain_path = Path(os.environ.get("SHORT_CONNECT_PLAIN_FILE") or _DEFAULT_PLAIN)
     k_probe = None
     if plain_path.is_file():
         # extract -k without storing into out
