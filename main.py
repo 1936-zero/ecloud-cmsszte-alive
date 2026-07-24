@@ -329,7 +329,25 @@ def _run_spice_oracle_entry(args, cfg, client, relogin_fn):
             )
             sys.exit(1)
 
-    host = getattr(args, "host", None) or "36.212.224.105"
+    # issue#2: empty/default host → resolve_gateway(cloud_pc regional CAG);
+    # stock GZ4 must not hard-override device_customLoginParams.
+    host = (getattr(args, "host", None) or "").strip()
+    if not host:
+        try:
+            from l3.gateway_config import resolve_gateway
+
+            _gw = resolve_gateway(try_client_discovery=True, allow_default=True)
+            host = str(_gw.cag_host or "")
+            log.info(
+                "SPICE host from resolve_gateway: %s src=%s",
+                host,
+                getattr(_gw, "source", ""),
+            )
+        except Exception as e:  # noqa: BLE001
+            from l3.gateway_config import DEFAULT_CAG_HOST
+
+            host = DEFAULT_CAG_HOST
+            log.warning("resolve_gateway failed (%s); fallback host=%s", e, host)
     pre = Path(getattr(args, "pre", None) or DEFAULT_PRE)
     post = Path(getattr(args, "post", None) or DEFAULT_POST)
     out_dir = Path(
@@ -540,8 +558,19 @@ def cmd_path_b_keepalive(args):
         session_nudge = False
 
     out_dir = Path(getattr(args, "out_dir", "") or "reports/r26_live/path_b_soak")
+    # issue#2: empty host → resolve_gateway (cloud_pc regional CAG)
+    _pb_host = str(getattr(args, "host", "") or "").strip()
+    if not _pb_host:
+        try:
+            from l3.gateway_config import resolve_gateway
+
+            _pb_host = str(resolve_gateway(try_client_discovery=True, allow_default=True).cag_host or "")
+        except Exception:  # noqa: BLE001
+            from l3.gateway_config import DEFAULT_CAG_HOST
+
+            _pb_host = DEFAULT_CAG_HOST
     finished = run_path_b_keepalive_loop(
-        host=str(getattr(args, "host", "") or "36.212.224.105"),
+        host=_pb_host,
         plain=plain,
         pre=Path(getattr(args, "pre", "") or DEFAULT_PRE),
         post=Path(getattr(args, "post", "") or DEFAULT_POST),
@@ -1139,8 +1168,14 @@ def _add_shared_path_b_loop_args(ap, *, out_dir_default: str, with_account_ping:
                     help="max rounds (default unlimited; 312≈26h @300s)")
     from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
 
-    ap.add_argument("--host", default="36.212.224.105",
-                    help="CAG host (public only; default 36.212.224.105)")
+    ap.add_argument(
+        "--host",
+        default="",
+        help=(
+            "CAG host override (empty=resolve from cloud_pc / env / "
+            "regional cagList; stock GZ4 only as last resort)"
+        ),
+    )
     ap.add_argument("--plain", default=DEFAULT_PLAIN,
                     help="connectStr plain path (contents never logged; "
                          "default: OS temp/ecloud-pathb or SHORT_CONNECT_PLAIN_FILE)")
@@ -1226,8 +1261,12 @@ def main():
         help="per-round HEART listen window seconds (default 60)",
     )
     pbk.add_argument(
-        "--host", default="36.212.224.105",
-        help="CAG host (default 36.212.224.105; public path)",
+        "--host",
+        default="",
+        help=(
+            "CAG host override (empty=resolve from cloud_pc / env / "
+            "regional cagList; stock GZ4 only as last resort)"
+        ),
     )
     from l3.platform_paths import DEFAULT_PLAIN, DEFAULT_POST, DEFAULT_PRE
 

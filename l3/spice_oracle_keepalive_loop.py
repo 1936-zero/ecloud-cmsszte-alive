@@ -282,17 +282,24 @@ def _need_remint(spice: Dict[str, Any], spice_err: Optional[str] = None) -> bool
 def _try_remint_connectstr(
     *,
     plain: Path,
-    host: str,
+    host: str = "",
     vmid_hint: str = "",
     timeout_s: float = 20.0,
 ) -> Dict[str, Any]:
-    """Mint/refresh connectStr into plain. Public meta only (no -k/plain dump)."""
+    """Mint/refresh connectStr into plain. Public meta only (no -k/plain dump).
+
+    #issue2 / #75fix remint: must use full resolve_gateway (cag_host+port+csapip)
+    like product_setup. Stock GZ4 default host alone must NOT override regional
+    CAG from cloud_pc (device_customLoginParams). vmid = machine_id UUID, never CCA-.
+    """
     out: Dict[str, Any] = {
         "ok": False,
         "error": None,
         "vmid_prefix": "",
         "plain_sha16": None,
         "production_claim": False,
+        "cag_host": None,
+        "gateway_source": None,
     }
     try:
         try:
@@ -301,17 +308,49 @@ def _try_remint_connectstr(
                 load_vmid_from_cloud_pc,
                 mint_connectstr,
             )
+            from .gateway_config import (  # type: ignore
+                DEFAULT_CAG_HOST,
+                resolve_gateway,
+            )
         except ImportError:
             from connectstr_mint import (  # type: ignore
                 MintRequest,
                 load_vmid_from_cloud_pc,
                 mint_connectstr,
             )
+            from gateway_config import (  # type: ignore
+                DEFAULT_CAG_HOST,
+                resolve_gateway,
+            )
     except Exception as e:  # noqa: BLE001
         out["error"] = f"mint_import_fail:{type(e).__name__}"
         return out
 
+    # Gateway: empty / stock DEFAULT host → let cloud_pc/env win (issue #2).
+    # Explicit non-default host still overrides (user CLI --host).
+    host_in = (host or "").strip()
+    cag_arg = host_in if host_in and host_in != DEFAULT_CAG_HOST else None
+    try:
+        gw = resolve_gateway(
+            cag_host=cag_arg,
+            try_client_discovery=True,
+            allow_default=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"gateway_resolve_fail:{type(e).__name__}:{e}"
+        return out
+    out["cag_host"] = gw.cag_host
+    out["gateway_source"] = getattr(gw, "source", None) or ""
+
+    # vmid = machine_id UUID for suOper; CCA- instance_id → CAG 501 no_connectStr
     vmid = (vmid_hint or "").strip()
+    saw_cca = False
+    if vmid.upper().startswith("CCA-"):
+        log.warning(
+            "remint: vmid_hint looks like instance_id (CCA-*); prefer machine_id"
+        )
+        saw_cca = True
+        vmid = ""
     if not vmid:
         try:
             vmid = load_vmid_from_cloud_pc() or ""
@@ -327,14 +366,36 @@ def _try_remint_connectstr(
                 vmid = _m.group(1)
         except Exception:
             pass
+    if vmid and vmid.upper().startswith("CCA-"):
+        out["error"] = "mint_vmid_is_instance_id_not_machine_id"
+        out["vmid_prefix"] = vmid[:16]
+        return out
     if not vmid:
-        out["error"] = "mint_vmid_missing"
+        # Prefer explicit CCA diagnostic when that was the only candidate.
+        out["error"] = (
+            "mint_vmid_is_instance_id_not_machine_id"
+            if saw_cca
+            else "mint_vmid_missing"
+        )
         return out
 
     out["vmid_prefix"] = vmid[:16]
+    log.info(
+        "remint mint → cag=%s:%s src=%s vmid_prefix=%s",
+        gw.cag_host,
+        gw.cag_port,
+        out["gateway_source"],
+        out["vmid_prefix"],
+    )
     try:
         mres = mint_connectstr(
-            MintRequest(vmid=vmid, cag_host=host, timeout_s=float(timeout_s)),
+            MintRequest(
+                vmid=vmid,
+                cag_host=gw.cag_host,
+                cag_port=int(gw.cag_port),
+                csapip=str(gw.csapip or ""),
+                timeout_s=float(timeout_s),
+            ),
             plain_path=Path(plain),
             write_plain=True,
             dry_run=False,
@@ -952,7 +1013,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="SPICE path_B + status/uptime oracle loop (claim=false)"
     )
-    ap.add_argument("--host", default=DEFAULT_CAG_HOST)
+    # issue#2: empty default → resolve_gateway/cloud_pc (not stock GZ4 pin)
+    ap.add_argument(
+        "--host",
+        default="",
+        help="CAG host override (empty=resolve from cloud_pc / env / default)",
+    )
     ap.add_argument("--plain", default=DEFAULT_PLAIN)
     ap.add_argument("--pre", default=DEFAULT_PRE)
     ap.add_argument("--post", default=DEFAULT_POST)
@@ -988,11 +1054,34 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = ap.parse_args(argv)
 
+    # issue#2: empty host → resolve_gateway (cloud_pc regional CAG)
+    _host = (args.host or "").strip()
+    if not _host:
+        try:
+            from gateway_config import resolve_gateway  # type: ignore
+
+            _host = str(
+                resolve_gateway(try_client_discovery=True, allow_default=True).cag_host
+                or ""
+            )
+        except Exception:
+            try:
+                from l3.gateway_config import resolve_gateway  # type: ignore
+
+                _host = str(
+                    resolve_gateway(
+                        try_client_discovery=True, allow_default=True
+                    ).cag_host
+                    or ""
+                )
+            except Exception:
+                _host = DEFAULT_CAG_HOST
+
     finished = run_spice_oracle_keepalive_loop(
         http=None,
         instance_id=args.instance_id,
         machine_id=args.machine_id,
-        host=args.host,
+        host=_host,
         plain=Path(args.plain),
         pre=Path(args.pre),
         post=Path(args.post),

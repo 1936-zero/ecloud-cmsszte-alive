@@ -253,7 +253,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="LIVE CAG path_B with stock defaults (claim=false)",
     )
-    ap.add_argument("--host", default=os.environ.get("CAG_HOST", DEFAULT_CAG_HOST))
+    # issue#2: empty default → resolve_gateway/cloud_pc (not stock GZ4 pin)
+    ap.add_argument(
+        "--host",
+        default=os.environ.get("CAG_HOST", "") or "",
+        help="CAG host override (empty=resolve from cloud_pc / env / default)",
+    )
     ap.add_argument(
         "--plain",
         default=os.environ.get("SHORT_CONNECT_PLAIN_FILE", DEFAULT_PLAIN),
@@ -342,6 +347,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     vmid = _m.group(1)
             except Exception:
                 pass
+        if vmid and str(vmid).upper().startswith("CCA-"):
+            # suOper wants machine_id UUID; CCA- instance_id → 501 no_connectStr
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": "mint_vmid_is_instance_id_not_machine_id",
+                        "production_claim": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 4
         if not vmid:
             print(
                 json.dumps(
@@ -354,8 +372,58 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
             )
             return 4
+        # issue#2: full gateway (host/port/csapip); empty/DEFAULT host → cloud_pc wins
+        try:
+            from gateway_config import (  # type: ignore
+                DEFAULT_CAG_HOST as _DEF_CAG,
+                resolve_gateway,
+            )
+        except Exception:
+            try:
+                from l3.gateway_config import (  # type: ignore
+                    DEFAULT_CAG_HOST as _DEF_CAG,
+                    resolve_gateway,
+                )
+            except Exception as e:  # pragma: no cover
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "error": f"gateway_import_fail:{type(e).__name__}",
+                            "production_claim": False,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return 4
+        _hin = (args.host or "").strip()
+        _cag_arg = _hin if _hin and _hin != _DEF_CAG else None
+        try:
+            gw = resolve_gateway(
+                cag_host=_cag_arg,
+                try_client_discovery=True,
+                allow_default=True,
+            )
+        except Exception as e:  # pragma: no cover
+            print(
+                json.dumps(
+                    {
+                        "ok": False,
+                        "error": f"gateway_resolve_fail:{type(e).__name__}",
+                        "production_claim": False,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return 4
         mres = mint_connectstr(
-            MintRequest(vmid=vmid, timeout_s=float(args.mint_timeout)),
+            MintRequest(
+                vmid=vmid,
+                cag_host=gw.cag_host,
+                cag_port=int(gw.cag_port),
+                csapip=str(gw.csapip or ""),
+                timeout_s=float(args.mint_timeout),
+            ),
             plain_path=Path(args.plain),
             write_plain=True,
             dry_run=False,
@@ -365,8 +433,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(json.dumps({"ok": False, "mint": mint_info}, ensure_ascii=False, indent=2))
             return 4
 
+    # issue#2: empty host → resolve_gateway (cloud_pc regional CAG)
+    _run_host = (args.host or "").strip()
+    if not _run_host:
+        try:
+            try:
+                from gateway_config import (  # type: ignore
+                    DEFAULT_CAG_HOST as _DEF_H,
+                    resolve_gateway as _rg,
+                )
+            except Exception:
+                from l3.gateway_config import (  # type: ignore
+                    DEFAULT_CAG_HOST as _DEF_H,
+                    resolve_gateway as _rg,
+                )
+            _run_host = str(
+                _rg(try_client_discovery=True, allow_default=True).cag_host or ""
+            ) or _DEF_H
+        except Exception:
+            try:
+                from gateway_config import DEFAULT_CAG_HOST as _DEF_H  # type: ignore
+            except Exception:
+                from l3.gateway_config import DEFAULT_CAG_HOST as _DEF_H  # type: ignore
+            _run_host = _DEF_H
     result = run_path_b_keepalive(
-        host=args.host,
+        host=_run_host,
         plain=Path(args.plain),
         heart_listen=float(args.heart_listen),
         ticket_mode=str(args.ticket_mode),
