@@ -35,7 +35,9 @@ import login
 import login_rate_limit
 from ecloud_client import EcloudError, EcloudHttpUtil
 from l3.gateway_config import (
+    apply_device_gateway_from_clp,
     gateway_from_custom_login_params,
+    gateway_source_is_weak,
     merge_gateway_into_cloud_pc,
 )
 from web.keepalive_manager import AccountKeepaliveManager, KeepaliveManager
@@ -261,17 +263,10 @@ class AccountRuntime:
 
     def _gateway_needs_refresh(self) -> bool:
         """#75fixy: weak/missing gateway must re-read customLoginParams."""
-        src = str(self._cfg.get("gateway_source") or "").strip().lower()
-        host = str(self._cfg.get("cag_host") or "").strip()
-        if not host:
-            return True
-        # default / account_weak / empty source = not device-region CAG
-        if not src or src in {"default", "account_weak", "fallback", "env"}:
-            return True
-        if "device" in src or "customlogin" in src.replace("_", "").lower():
-            return False
-        # any non-device source is treated as weak for region CAG
-        return src not in {"cli", "manual", "user"}
+        return gateway_source_is_weak(
+            str(self._cfg.get("gateway_source") or ""),
+            str(self._cfg.get("cag_host") or ""),
+        )
 
     def _apply_desktop_gateway_locked(self, desktop) -> bool:
         """Write region CAG from desktop.custom_login_params into self._cfg (lock held).
@@ -281,21 +276,22 @@ class AccountRuntime:
         clp = getattr(desktop, "custom_login_params", None)
         if not clp:
             return False
-        try:
-            gw = gateway_from_custom_login_params(clp)
-        except Exception as e:
-            self.log("INFO", f"parse customLoginParams skip: {type(e).__name__}")
-            return False
-        if gw is None:
-            return False
         before = (
             str(self._cfg.get("cag_host") or ""),
             str(self._cfg.get("cag_port") or ""),
             str(self._cfg.get("csapip") or ""),
             str(self._cfg.get("gateway_source") or ""),
         )
-        # force overwrite weak/default; device clp is authoritative for this desktop
-        self._cfg = merge_gateway_into_cloud_pc(self._cfg, gw, only_missing=False)
+        try:
+            cfg2, gw = apply_device_gateway_from_clp(
+                self._cfg, clp, only_missing=False
+            )
+        except Exception as e:
+            self.log("INFO", f"parse customLoginParams skip: {type(e).__name__}")
+            return False
+        if gw is None:
+            return False
+        self._cfg = cfg2
         after = (
             str(self._cfg.get("cag_host") or ""),
             str(self._cfg.get("cag_port") or ""),

@@ -130,7 +130,7 @@ python main.py desktop-keepalive
 
 若本机只有 `python3` 命令，把上面的 `python` 全部换成 `python3`。
 
-**Windows 路径说明（issue #1）：**
+**Windows 路径说明：**
 - 会话凭证默认写在系统临时目录：`%TEMP%\ecloud-pathb\connectstr.plain`（**不是** Linux 的 `/tmp/...`，也不是 `C:\tmp\...`）。
 - Path B 帧模板默认用仓库内 `assets\templates\pre` 与 `assets\templates\post`（clone 即有，无需手动准备）。
 - `desktop-keepalive` / `keepalive` 在凭证文件缺失时会**自动 mint**（与 WebUI 同序：开机 → 签发 → Path B）；也可先跑 `python main.py setup`。

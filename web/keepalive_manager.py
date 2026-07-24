@@ -688,10 +688,7 @@ class KeepaliveManager:
         """Re-list desktop and force-write customLoginParams → region CAG (#75fixy)."""
         try:
             from desktop_list import get_desktop_list
-            from l3.gateway_config import (
-                gateway_from_custom_login_params,
-                merge_gateway_into_cloud_pc,
-            )
+            from l3.gateway_config import apply_device_gateway_from_clp
         except Exception as e:
             self._log("INFO", f"gateway refresh import skip: {_safe_public_err(str(e))}")
             return cfg
@@ -715,15 +712,15 @@ class KeepaliveManager:
         if not clp:
             self._log("INFO", "gateway refresh: no customLoginParams on desktop")
             return cfg
+        before = (cfg.get("cag_host"), cfg.get("cag_port"), cfg.get("gateway_source"))
         try:
-            gw = gateway_from_custom_login_params(clp)
+            cfg2, gw = apply_device_gateway_from_clp(cfg, clp, only_missing=False)
         except Exception as e:
             self._log("INFO", f"gateway refresh parse skip: {_safe_public_err(str(e))}")
             return cfg
         if gw is None:
             return cfg
-        before = (cfg.get("cag_host"), cfg.get("cag_port"), cfg.get("gateway_source"))
-        cfg = merge_gateway_into_cloud_pc(cfg, gw, only_missing=False)
+        cfg = cfg2
         try:
             self._save_cfg_local(cfg)
         except Exception:

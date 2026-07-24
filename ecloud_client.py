@@ -10,6 +10,7 @@
 import hashlib
 import hmac
 import json
+import os
 import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,24 @@ from Crypto.Cipher import PKCS1_v1_5
 from Crypto.PublicKey import RSA
 
 import config
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """Parse env as bool. True for 1/true/yes/on (case-insensitive)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def trust_env_enabled() -> bool:
+    """Whether requests should honor HTTP(S)_PROXY / ALL_PROXY.
+
+    Default False: Clash/VPN MITM often breaks cloudpc.ecloud.10086.cn TLS
+    (UNEXPECTED_EOF_WHILE_READING). Opt-in with ECLOUD_TRUST_ENV=1 when the
+    operator intentionally needs a corporate proxy.
+    """
+    return _env_truthy("ECLOUD_TRUST_ENV", default=False)
 
 
 def _load_rsa_pub() -> RSA.RsaKey:
@@ -144,6 +163,8 @@ class EcloudHttpUtil:
         self.common_params = common_params
         self.access_token: str | None = None
         self._session = requests.Session()
+        # Bypass system proxy by default (Clash/VPN TLS EOF on cloudpc host).
+        self._session.trust_env = trust_env_enabled()
         self._session.headers.update({
             "Content-Type": "application/json",
             "User-Agent": config.USER_AGENT,

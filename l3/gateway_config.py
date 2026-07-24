@@ -176,6 +176,68 @@ def merge_gateway_into_cloud_pc(
     return out
 
 
+def gateway_source_is_weak(
+    source: str | None = None,
+    host: str | None = None,
+) -> bool:
+    """True when cfg gateway is missing/default/non-device (must re-read CLP).
+
+    Shared by WebUI account_runtime, CLI desktop-keepalive resolve, remint.
+    Device/customLogin sources are strong; default/empty/env/account_weak are not.
+    Stock DEFAULT_CAG_HOST alone is also weak (GZ4 pin must not stick).
+    """
+    src = str(source or "").strip().lower()
+    h = str(host or "").strip()
+    if not h or h == DEFAULT_CAG_HOST:
+        return True
+    if not src or src in {"default", "account_weak", "fallback", "env"}:
+        return True
+    # device_customLoginParams / device_* / customlogin*
+    compact = src.replace("_", "").replace("-", "")
+    if "device" in src or "customlogin" in compact:
+        return False
+    # explicit CLI / manual / user overrides are strong
+    if src in {"cli", "manual", "user"} or src.startswith("explicit"):
+        return False
+    # cloud_pc / client_config without device clp → treat weak for region refresh
+    return True
+
+
+def apply_device_gateway_from_clp(
+    cfg: dict,
+    clp: Any,
+    *,
+    only_missing: bool = False,
+    force: bool = False,
+) -> tuple[dict, Optional[GatewayEndpoints]]:
+    """Parse desktop customLoginParams and merge into cfg when useful.
+
+    Returns (cfg, gw_or_None). only_missing=False overwrites weak/default CAG
+    (device clp is authoritative for this desktop). If force=False and current
+    source is strong (explicit/cli/manual), skip overwrite even when clp present.
+    """
+    if not clp:
+        return cfg, None
+    try:
+        gw = gateway_from_custom_login_params(clp)
+    except Exception as e:  # noqa: BLE001
+        log.debug("apply_device_gateway_from_clp parse skip: %s", e)
+        return cfg, None
+    if gw is None:
+        return cfg, None
+    if not force:
+        src = str(cfg.get("gateway_source") or "")
+        # preserve explicit CLI/env-style strong sources
+        if src.startswith("explicit") or src in {"cli", "manual", "user"}:
+            return cfg, None
+        # env is weak for region CAG (operator may still set CAG_HOST intentionally;
+        # only skip when env is strong AND host is non-default — rare)
+        if src.startswith("env") and not gateway_source_is_weak(src, str(cfg.get("cag_host") or "")):
+            return cfg, None
+    cfg2 = merge_gateway_into_cloud_pc(cfg, gw, only_missing=only_missing)
+    return cfg2, gw
+
+
 def gateway_from_custom_login_params(
     clp: Any,
     *,

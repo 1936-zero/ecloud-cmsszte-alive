@@ -90,46 +90,36 @@ def test_mint_recover_wait_only_when_do_power_false(tmp_path: Path) -> None:
     }
     saved: list = []
 
-    with mock.patch("l3.product_setup.resolve_gateway", return_value=gw), mock.patch(
-        "l3.product_setup.merge_gateway_into_cloud_pc", side_effect=lambda c, *a, **k: c
+    # resolve/merge/mint are imported inside run_product_setup — patch sources
+    with mock.patch(
+        "l3.gateway_config.resolve_gateway", return_value=gw
     ), mock.patch(
-        "l3.product_setup._pick_desktop", return_value=(_FakeDesktop(), [_FakeDesktop()])
+        "l3.gateway_config.merge_gateway_into_cloud_pc",
+        side_effect=lambda c, *a, **k: c,
     ), mock.patch(
-        "l3.product_setup.mint_connectstr", side_effect=fake_mint
+        "l3.gateway_config.apply_device_gateway_from_clp",
+        return_value=(cfg, None),
     ), mock.patch(
-        "l3.product_setup.time.sleep", side_effect=lambda s: sleeps.append(float(s))
+        "l3.product_setup._pick_desktop",
+        return_value=(_FakeDesktop(), [_FakeDesktop()]),
     ), mock.patch(
-        "l3.product_setup.gateway_from_custom_login_params", return_value=None
+        "l3.connectstr_mint.mint_connectstr", side_effect=fake_mint
+    ), mock.patch(
+        "l3.product_setup.time.sleep",
+        side_effect=lambda s: sleeps.append(float(s)),
     ):
-        # gateway imports are inside function; patch modules used after import
-        with mock.patch(
-            "l3.gateway_config.resolve_gateway", return_value=gw
-        ), mock.patch(
-            "l3.gateway_config.merge_gateway_into_cloud_pc",
-            side_effect=lambda c, *a, **k: c,
-        ), mock.patch(
-            "l3.gateway_config.gateway_from_custom_login_params", return_value=None
-        ), mock.patch(
-            "l3.connectstr_mint.mint_connectstr", side_effect=fake_mint
-        ):
-            # ensure mint is the one product_setup binds
-            import l3.product_setup as ps
-
-            with mock.patch.object(ps, "mint_connectstr", side_effect=fake_mint), mock.patch.object(
-                ps.time, "sleep", side_effect=lambda s: sleeps.append(float(s))
-            ):
-                r = run_product_setup(
-                    cfg=cfg,
-                    client=object(),
-                    save_config=lambda c: saved.append(dict(c)),
-                    plain_path=plain,
-                    do_power=False,
-                    force_power=False,
-                    do_mint=True,
-                    do_path_b=False,
-                    mint_power_retry=True,
-                    power_wait_s=3.0,
-                )
+        r = run_product_setup(
+            cfg=cfg,
+            client=object(),
+            save_config=lambda c: saved.append(dict(c)),
+            plain_path=plain,
+            do_power=False,
+            force_power=False,
+            do_mint=True,
+            do_path_b=False,
+            mint_power_retry=True,
+            power_wait_s=3.0,
+        )
 
     assert mint_calls["n"] == 2, mint_calls
     assert sleeps and sleeps[0] >= 3.0, sleeps

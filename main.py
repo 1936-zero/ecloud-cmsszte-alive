@@ -221,6 +221,14 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
     no_auto = bool(getattr(args, "no_auto_select", False))
     desktop = None
 
+    def _match_desktop(desktops, iid: str, mid: str):
+        for d in desktops or []:
+            if iid and d.instance_id == iid:
+                return d
+            if mid and d.machine_id == mid:
+                return d
+        return None
+
     if not instance_id and not no_auto:
         log.info("auto-selecting desktop from /user/getDeviceInfo ...")
         try:
@@ -238,26 +246,26 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
         machine_id = desktop.machine_id or machine_id
         origin = getattr(desktop, "origin_company_code", "") or origin
         log.info("auto-selected: %s origin=%s", desktop, origin or "?")
-    elif instance_id and not origin:
-        # Look up origin for specified instance so vendor routing is correct
+    elif instance_id:
+        # Always try to attach Desktop (origin + customLoginParams region CAG).
+        # Cached instance_id alone used to skip list → remint stayed on stock GZ4.
         try:
             desktops = desktop_list.get_desktop_list(client)
-            for d in desktops:
-                if d.instance_id == instance_id:
-                    desktop = d
-                    machine_id = machine_id or d.machine_id or ""
-                    origin = getattr(d, "origin_company_code", "") or origin
-                    break
+            desktop = _match_desktop(desktops, instance_id, machine_id)
+            if desktop is not None:
+                machine_id = machine_id or desktop.machine_id or ""
+                origin = getattr(desktop, "origin_company_code", "") or origin
         except EcloudError as e:
-            log.warning("origin lookup failed: %s", e)
+            log.warning("desktop lookup failed: %s", e)
             if _token_maybe_expired(e) and relogin_fn and relogin_fn():
                 try:
                     desktops = desktop_list.get_desktop_list(client)
-                    for d in desktops:
-                        if d.instance_id == instance_id:
-                            origin = getattr(d, "origin_company_code", "") or origin
-                            machine_id = machine_id or d.machine_id or ""
-                            break
+                    desktop = _match_desktop(desktops, instance_id, machine_id)
+                    if desktop is not None:
+                        machine_id = machine_id or desktop.machine_id or ""
+                        origin = (
+                            getattr(desktop, "origin_company_code", "") or origin
+                        )
                 except EcloudError:
                     pass
 
@@ -270,6 +278,37 @@ def _resolve_desktop_for_spice(args, cfg, client, relogin_fn):
         cfg["machine_id"] = machine_id
     if origin:
         cfg["origin_company_code"] = origin
+
+    # Persist device CLP regional CAG into cfg (same as product_setup/WebUI).
+    # Without this, remint can fall back to stock GZ4 → CAG 501 cross-region.
+    if desktop is not None:
+        try:
+            from l3.gateway_config import (
+                apply_device_gateway_from_clp,
+                gateway_source_is_weak,
+            )
+
+            clp = getattr(desktop, "custom_login_params", None)
+            if clp and gateway_source_is_weak(
+                str(cfg.get("gateway_source") or ""),
+                str(cfg.get("cag_host") or ""),
+            ):
+                cfg2, dev_gw = apply_device_gateway_from_clp(
+                    cfg, clp, only_missing=False
+                )
+                if dev_gw is not None:
+                    # mutate caller's dict (merge returns a copy)
+                    cfg.clear()
+                    cfg.update(cfg2)
+                    log.info(
+                        "gateway_device=%s:%s src=%s (from desktop CLP)",
+                        dev_gw.cag_host,
+                        dev_gw.cag_port,
+                        dev_gw.source,
+                    )
+        except Exception as e:  # noqa: BLE001
+            log.warning("device gateway from CLP skip: %s", type(e).__name__)
+
     save_config(cfg)
     return instance_id, machine_id, (origin or "")
 

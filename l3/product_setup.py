@@ -203,29 +203,23 @@ def run_product_setup(
     # 「查询虚机状态异常，请确认虚机是否存在！」. Device list is authoritative
     # over default / stale cloud_pc; never override explicit/env.
     try:
-        from l3.gateway_config import gateway_from_custom_login_params
+        from l3.gateway_config import apply_device_gateway_from_clp
 
         clp = getattr(desktop, "custom_login_params", None)
-        dev_gw = gateway_from_custom_login_params(clp) if clp else None
-        src = (gw.source or "")
-        allow_device = not (
-            src.startswith("explicit") or src.startswith("env")
+        cfg2, dev_gw = apply_device_gateway_from_clp(
+            cfg, clp, only_missing=False
         )
-        if dev_gw and allow_device:
-            if (
-                src == "default"
-                or src.startswith("client_config")
-                or src.startswith("cloud_pc")
-                or (dev_gw.cag_host and dev_gw.cag_host != gw.cag_host)
-            ):
-                gw = dev_gw
-                cfg = merge_gateway_into_cloud_pc(cfg, gw, only_missing=False)
-                save_config(cfg)
-                notes.append(
-                    f"gateway_device={gw.cag_host}:{gw.cag_port} src={gw.source}"
-                )
-                result.gateway = gw.as_public_dict()
-                result.notes = notes
+        if dev_gw is not None:
+            # apply_device_gateway_from_clp skips explicit/cli/manual; otherwise
+            # device CLP overwrites weak/default/cloud_pc (region CAG).
+            cfg = cfg2
+            gw = dev_gw
+            save_config(cfg)
+            notes.append(
+                f"gateway_device={gw.cag_host}:{gw.cag_port} src={gw.source}"
+            )
+            result.gateway = gw.as_public_dict()
+            result.notes = notes
     except Exception as e:
         notes.append(f"gateway_device_skip:{type(e).__name__}")
         result.notes = notes

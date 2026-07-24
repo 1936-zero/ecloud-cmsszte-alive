@@ -204,7 +204,19 @@ def mint_connectstr(
         return base
 
     try:
-        resp = requests.post(
+        # Same proxy policy as ecloud_client: default bypass HTTP(S)_PROXY
+        # (Clash MITM breaks CAG regional IP / TLS). Opt-in ECLOUD_TRUST_ENV=1.
+        try:
+            from ecloud_client import trust_env_enabled as _trust_env  # type: ignore
+        except ImportError:
+            def _trust_env() -> bool:  # type: ignore
+                return str(os.environ.get("ECLOUD_TRUST_ENV") or "").strip().lower() in {
+                    "1", "true", "yes", "on",
+                }
+
+        sess = requests.Session()
+        sess.trust_env = bool(_trust_env())
+        resp = sess.post(
             url,
             headers=headers,
             data=json.dumps(body, ensure_ascii=False),
