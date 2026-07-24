@@ -15,7 +15,7 @@ def register_account_routes(app: Flask) -> None:
     """Register /api/accounts* and /api/global-logs* on app."""
 
     # -----------------------------------------------------------------------
-    # Multi-account cards (Path B per-account; does not replace legacy /api/*)
+    # Multi-account cards (Path B per-account; sole desktop-keepalive API surface)
     # -----------------------------------------------------------------------
     def _acc_or_404(account_id: str):
         acc = get_registry().get(account_id)

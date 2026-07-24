@@ -72,32 +72,7 @@ class WebUiStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("移动云电脑保活", response.get_data(as_text=True))
 
-    def test_all_logs_merges_sources_in_sequence_order(self):
-        app = server.create_app()
 
-        with patch.object(server._ka, "get_logs", return_value=[
-            {"seq": 30, "time": "00:00:30", "created_at": "2026-07-01T00:00:30.000", "level": "INFO", "msg": "desktop"},
-        ]) as desktop_logs, patch.object(server._account_ka, "get_logs", return_value=[
-            {"seq": 20, "time": "00:00:20", "created_at": "2026-07-01T00:00:20.000", "level": "INFO", "msg": "account"},
-        ]) as account_logs:
-            data = app.test_client().get("/api/all-logs?since=10").get_json()
-
-        desktop_logs.assert_called_once_with(10)
-        account_logs.assert_called_once_with(10)
-        self.assertEqual(
-            [(item["source"], item["seq"]) for item in data["logs"]],
-            [("账号", 20), ("桌面", 30)],
-        )
-
-    def test_all_logs_uses_independent_source_cursors(self):
-        app = server.create_app()
-
-        with patch.object(server._ka, "get_logs", return_value=[]) as desktop_logs, \
-             patch.object(server._account_ka, "get_logs", return_value=[]) as account_logs:
-            app.test_client().get("/api/all-logs?desktop_since=100&account_since=20")
-
-        desktop_logs.assert_called_once_with(100)
-        account_logs.assert_called_once_with(20)
 
     def test_status_relogs_in_when_saved_token_is_invalid_and_credentials_exist(self):
         app = server.create_app()
@@ -168,20 +143,17 @@ class WebUiStatusTests(unittest.TestCase):
 
         with patch.object(server._account_ka, "is_running", return_value=True), \
              patch.object(server._account_ka, "stop", return_value=True) as account_stop, \
-             patch.object(server._ka, "is_running", return_value=True), \
-             patch.object(server._ka, "stop", return_value=True) as desktop_stop, \
              patch("web.server.login.logout") as logout, \
              patch("web.server._save_cfg") as save_cfg:
             data = app.test_client().post("/api/logout").get_json()
 
         self.assertTrue(data["ok"])
         account_stop.assert_called_once()
-        desktop_stop.assert_called_once()
         logout.assert_called_once_with(fake_http)
         self.assertNotIn("access_token", server._app_state["cfg"])
         self.assertFalse(server._app_state["cfg"]["account_keepalive_autostart"])
-        self.assertFalse(server._app_state["cfg"]["keepalive_autostart"])
-        self.assertEqual(save_cfg.call_count, 3)
+        # account autostart persist + final token clear
+        self.assertEqual(save_cfg.call_count, 2)
 
 
 class KeepaliveManagerTests(unittest.TestCase):
@@ -353,116 +325,18 @@ class DesktopStartPreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg_path = Path(tmpdir) / "cloud_pc.json"
             with patch("web.server.CONFIG_FILE", str(cfg_path)):
-                server._save_cfg({"keepalive_autostart": True, "keepalive_interval": 300})
+                server._save_cfg({"account_keepalive_autostart": True, "account_keepalive_interval": 300})
 
             self.assertEqual(
                 json.loads(cfg_path.read_text(encoding="utf-8")),
-                {"keepalive_autostart": True, "keepalive_interval": 300},
+                {"account_keepalive_autostart": True, "account_keepalive_interval": 300},
             )
             self.assertEqual(list(Path(tmpdir).glob("*.tmp")), [])
 
-    def test_preflight_uses_desktop_uptime_not_status_enum_guess(self):
-        class FakeHttp:
-            common_params = {}
 
-            def post(self, endpoint, payload=None):
-                if endpoint == config.Endpoint.DESKTOP_UPTIME:
-                    return "0小时1分2秒"
-                raise AssertionError(endpoint)
 
-        self.assertEqual(
-            server._preflight_uptime(FakeHttp(), "CCA-test"),
-            "0小时1分2秒",
-        )
 
-    def test_start_does_not_block_on_unknown_status_when_uptime_succeeds(self):
-        app = server.create_app()
-        server._app_state["cfg"] = {"access_token": "valid-token"}
-        server._app_state["http"] = object()
 
-        with patch("web.server.desktop_list.get_desktop_status", return_value={"CCA-test": "mystery"}), \
-             patch("web.server._preflight_uptime", return_value="0小时1分2秒"), \
-             patch.object(server._ka, "start", return_value=True) as start, \
-             patch("web.server._save_cfg") as save_cfg:
-            data = app.test_client().post(
-                "/api/keepalive/start",
-                json={"instance_id": "CCA-test", "machine_id": "MID-test", "interval": 60},
-            ).get_json()
-
-        self.assertTrue(data["ok"])
-        start.assert_called_once()
-        self.assertEqual(start.call_args.kwargs["machine_id"], "MID-test")
-        self.assertEqual(server._app_state["cfg"]["instance_id"], "CCA-test")
-        self.assertEqual(server._app_state["cfg"]["machine_id"], "MID-test")
-        self.assertTrue(server._app_state["cfg"]["keepalive_autostart"])
-        self.assertEqual(server._app_state["cfg"]["keepalive_interval"], 60)
-        self.assertEqual(save_cfg.call_count, 2)
-
-    def test_stop_disables_persisted_autostart(self):
-        app = server.create_app()
-        server._app_state["cfg"] = {"keepalive_autostart": True}
-        events = []
-
-        def save_cfg(cfg):
-            events.append(("save", cfg["keepalive_autostart"]))
-
-        def stop():
-            events.append(("stop", None))
-            return False
-
-        with patch.object(server._ka, "stop", side_effect=stop) as stop_mock, \
-             patch("web.server._save_cfg", side_effect=save_cfg) as save_cfg_mock:
-            data = app.test_client().post("/api/keepalive/stop").get_json()
-
-        self.assertFalse(data["ok"])
-        stop_mock.assert_called_once()
-        self.assertFalse(server._app_state["cfg"]["keepalive_autostart"])
-        save_cfg_mock.assert_called_once()
-        self.assertEqual(events, [("save", False), ("stop", None)])
-
-    def test_autostart_starts_keepalive_from_config(self):
-        server._app_state["cfg"] = {
-            "access_token": "valid-token",
-            "instance_id": "CCA-test",
-            "machine_id": "MID-test",
-            "ticket": "ticket-test",
-            "keepalive_autostart": True,
-            "keepalive_interval": 60,
-        }
-        fake_http = object()
-        server._app_state["http"] = fake_http
-
-        with patch.object(server._ka, "is_running", return_value=False), \
-             patch.object(server._ka, "start", return_value=True) as start:
-            self.assertTrue(server._ensure_keepalive_autostart("test"))
-
-        start.assert_called_once()
-        args, kwargs = start.call_args
-        self.assertIs(args[0], fake_http)
-        self.assertEqual(args[1], "CCA-test")
-        self.assertEqual(kwargs["machine_id"], "MID-test")
-        self.assertEqual(kwargs["ticket"], "ticket-test")
-        self.assertEqual(kwargs["interval"], 60)
-
-    def test_autostart_reloads_config_when_memory_state_is_stale(self):
-        server._app_state["cfg"] = {"keepalive_autostart": False}
-        fake_http = object()
-        server._app_state["http"] = fake_http
-
-        with patch("web.server._load_cfg", return_value={
-            "access_token": "valid-token",
-            "instance_id": "CCA-test",
-            "machine_id": "MID-test",
-            "keepalive_autostart": True,
-            "keepalive_interval": 90,
-        }), patch.object(server._ka, "is_running", return_value=False), \
-             patch.object(server._ka, "start", return_value=True) as start:
-            self.assertTrue(server._ensure_keepalive_autostart("test"))
-
-        start.assert_called_once()
-        self.assertTrue(server._app_state["cfg"]["keepalive_autostart"])
-        self.assertEqual(start.call_args.kwargs["machine_id"], "MID-test")
-        self.assertEqual(start.call_args.kwargs["interval"], 90)
 
     def test_account_keepalive_start_persists_autostart(self):
         app = server.create_app()

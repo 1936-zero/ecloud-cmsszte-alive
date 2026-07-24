@@ -1,7 +1,7 @@
 """
 Flask Web UI 服务。
 
-提供 JSON API + 单页 HTML 前端，复用现有 login/desktop_session 模块。
+提供 JSON API + 单页 HTML 前端，复用现有 login/desktop_list 模块。
 登录交互改为 API 驱动（不再用 input()）。
 """
 import json
@@ -25,9 +25,8 @@ import device
 import login
 import login_rate_limit
 import desktop_list
-import desktop_session
 from ecloud_client import EcloudHttpUtil, EcloudError
-from web.keepalive_manager import AccountKeepaliveManager, KeepaliveManager
+from web.keepalive_manager import AccountKeepaliveManager
 from web.account_runtime import get_registry
 
 log = logging.getLogger("web")
@@ -51,7 +50,6 @@ _app_state = {
 }
 _lock = threading.Lock()
 _account_ka = AccountKeepaliveManager()
-_ka = KeepaliveManager()
 _watchdog_lock = threading.Lock()
 _watchdog_started = False
 _WATCHDOG_INTERVAL = int(os.environ.get("CLOUD_PC_KEEPALIVE_WATCHDOG_INTERVAL", "60"))
@@ -62,14 +60,6 @@ def _token_maybe_expired(err: EcloudError) -> bool:
     return any(h in msg for h in ["token", "失效", "未登录", "expire", "401", "授权"])
 
 
-def _preflight_uptime(http: EcloudHttpUtil, instance_id: str) -> str:
-    """Use desktopUptime as the runtime source of truth before starting keepalive."""
-    if not instance_id:
-        raise EcloudError({
-            "errorCode": "NO_INSTANCE",
-            "errorMessage": "缺少桌面实例 ID",
-        })
-    return desktop_session.DesktopSession(http, instance_id).report_uptime()
 
 
 def _safe_log_obj(obj):
@@ -112,13 +102,6 @@ def _save_cfg(cfg: dict):
             os.unlink(tmp_file)
 
 
-def _persist_keepalive_autostart(enabled: bool, interval: int | None = None):
-    with _lock:
-        cfg = _app_state["cfg"]
-        cfg["keepalive_autostart"] = bool(enabled)
-        if interval is not None:
-            cfg["keepalive_interval"] = interval
-        _save_cfg(cfg)
 
 
 def _persist_account_keepalive_autostart(enabled: bool, interval: int | None = None):
@@ -179,53 +162,6 @@ def _relogin_with_saved_credentials() -> str | None:
     return None
 
 
-def _ensure_keepalive_autostart(reason: str = "watchdog") -> bool:
-    """Start the in-process keepalive worker if config says it should be running."""
-    if _ka.is_running():
-        return True
-
-    cfg = _app_state["cfg"]
-    if not cfg.get("keepalive_autostart"):
-        disk_cfg = _load_cfg()
-        if not disk_cfg.get("keepalive_autostart"):
-            return False
-        with _lock:
-            _app_state["cfg"] = disk_cfg
-            cfg = disk_cfg
-
-    instance_id = cfg.get("instance_id", "")
-    if not instance_id:
-        log.warning("keepalive autostart skipped: no instance_id")
-        return False
-    machine_id = cfg.get("machine_id", "")
-    ticket = cfg.get("ticket", "")
-
-    try:
-        interval = int(cfg.get("keepalive_interval", 300))
-    except (TypeError, ValueError):
-        interval = 300
-    if interval < 30:
-        interval = 30
-
-    http = _get_or_create_http()
-
-    def _relogin():
-        return _relogin_with_saved_credentials()
-
-    ok = _ka.start(
-        http,
-        instance_id,
-        machine_id=machine_id,
-        ticket=ticket,
-        interval=interval,
-        relogin_fn=_relogin,
-    )
-    if ok:
-        log.info(
-            "keepalive autostart recovered by %s: instance=%s interval=%ds",
-            reason, instance_id[:20], interval,
-        )
-    return ok
 
 
 def _ensure_account_keepalive_autostart(reason: str = "watchdog") -> bool:
@@ -268,7 +204,6 @@ def _keepalive_autostart_watchdog(interval: int):
     while True:
         try:
             _ensure_account_keepalive_autostart()
-            _ensure_keepalive_autostart()
         except Exception:
             log.exception("keepalive autostart watchdog failed")
         time.sleep(interval)
@@ -666,7 +601,6 @@ def create_app() -> Flask:
             "username": cfg.get("username", ""),
             "device_uid": cfg.get("device_uid", ""),
             "account_keepalive": _account_ka.get_status(),
-            "keepalive": _ka.get_status(),
         }
         if error:
             payload["error"] = error
@@ -934,157 +868,14 @@ def create_app() -> Flask:
         since = int(request.args.get("since", 0))
         return jsonify({"logs": _account_ka.get_logs(since)})
 
-    @app.route("/api/keepalive/start", methods=["POST"])
-    def api_ka_start():
-        cfg = _app_state["cfg"]
-        if not cfg.get("access_token"):
-            return jsonify({"error": "未登录"}), 401
-
-        data = request.get_json(silent=True) or {}
-        instance_id = data.get("instance_id", "")
-        machine_id = data.get("machine_id", "")
-        ticket = data.get("ticket", "") or cfg.get("ticket", "")
-        try:
-            interval = int(data.get("interval", 300))
-        except (TypeError, ValueError):
-            return jsonify({"error": "保活间隔必须是数字"}), 400
-        if interval < 30:
-            interval = 30
-
-        http = _get_or_create_http()
-
-        def _relogin():
-            """token 失效重登回调。"""
-            return _relogin_with_saved_credentials()
-
-        def _call_with_relogin(fn):
-            try:
-                return fn()
-            except EcloudError as e:
-                if _token_maybe_expired(e) and _relogin():
-                    return fn()
-                raise
-
-        # 自动选桌面
-        if not instance_id:
-            try:
-                desktops = _call_with_relogin(lambda: desktop_list.get_desktop_list(http))
-                if not desktops:
-                    return jsonify({"error": "账号下没有可用桌面"})
-                try:
-                    statuses = _call_with_relogin(lambda: desktop_list.get_desktop_status(http, desktops))
-                except EcloudError as e:
-                    statuses = {}
-                    log.info("desktop status unavailable during start preflight: %s", e.message)
-
-                selected = None
-                preflight_errors = []
-                for d in desktops:
-                    st = statuses.get(d.instance_id, "")
-                    try:
-                        uptime = _call_with_relogin(lambda d=d: _preflight_uptime(http, d.instance_id))
-                    except EcloudError as e:
-                        label = d.machine_name or d.instance_id[:20] or "未知桌面"
-                        state = f", status={st}" if st else ""
-                        preflight_errors.append(f"{label}{state}: {e.message}")
-                    else:
-                        log.info("desktop preflight ok: instance=%s status=%s uptime=%s",
-                                 d.instance_id[:20], st or "?", uptime)
-                        selected = d
-                        break
-                if selected is None:
-                    detail = preflight_errors[0] if preflight_errors else "desktopUptime 未返回运行时长"
-                    return jsonify({"error": f"没有可保活桌面：{detail}"})
-                instance_id = selected.instance_id
-                machine_id = selected.machine_id
-                cfg["instance_id"] = instance_id
-                cfg["machine_id"] = selected.machine_id
-                _save_cfg(cfg)
-            except EcloudError as e:
-                return jsonify({"error": f"拉取桌面列表失败: {e.message}"})
-        else:
-            if not machine_id and cfg.get("instance_id") == instance_id:
-                machine_id = cfg.get("machine_id", "")
-            if not machine_id:
-                try:
-                    desktops = _call_with_relogin(lambda: desktop_list.get_desktop_list(http))
-                    for d in desktops:
-                        if d.instance_id == instance_id:
-                            machine_id = d.machine_id
-                            break
-                except EcloudError as e:
-                    log.info("desktop machine_id lookup failed during start: %s", e.message)
-            try:
-                uptime = _call_with_relogin(lambda: _preflight_uptime(http, instance_id))
-                log.info("desktop preflight ok: instance=%s uptime=%s", instance_id[:20], uptime)
-            except EcloudError as e:
-                return jsonify({"error": f"桌面不可保活: {e.message}"})
-            cfg["instance_id"] = instance_id
-            if machine_id:
-                cfg["machine_id"] = machine_id
-            if ticket:
-                cfg["ticket"] = ticket
-            _save_cfg(cfg)
-
-        ok = _ka.start(
-            http,
-            instance_id,
-            machine_id=machine_id,
-            ticket=ticket,
-            interval=interval,
-            relogin_fn=_relogin,
-        )
-        if not ok:
-            return jsonify({"error": "保活已在运行"})
-        _persist_keepalive_autostart(True, interval=interval)
-        return jsonify({"ok": True, "instance_id": instance_id, "interval": interval})
-
-    @app.route("/api/keepalive/stop", methods=["POST"])
-    def api_ka_stop():
-        _persist_keepalive_autostart(False)
-        ok = _ka.stop()
-        return jsonify({"ok": ok})
-
-    @app.route("/api/keepalive/status")
-    def api_ka_status():
-        return jsonify(_ka.get_status())
-
-    # -----------------------------------------------------------------------
-    # 日志
-    # -----------------------------------------------------------------------
-    @app.route("/api/logs")
-    def api_logs():
-        since = int(request.args.get("since", 0))
-        return jsonify({"logs": _ka.get_logs(since)})
-
-    @app.route("/api/all-logs")
-    def api_all_logs():
-        since = int(request.args.get("since", 0))
-        desktop_since = int(request.args.get("desktop_since", since))
-        account_since = int(request.args.get("account_since", since))
-        logs = []
-        for entry in _ka.get_logs(desktop_since):
-            item = dict(entry)
-            item["source"] = "桌面"
-            logs.append(item)
-        for entry in _account_ka.get_logs(account_since):
-            item = dict(entry)
-            item["source"] = "账号"
-            logs.append(item)
-        logs.sort(key=lambda item: (item.get("created_at", ""), item["seq"], item["source"]))
-        return jsonify({"logs": logs})
-
     # -----------------------------------------------------------------------
     # 登出
     # -----------------------------------------------------------------------
     @app.route("/api/logout", methods=["POST"])
     def api_logout():
         _persist_account_keepalive_autostart(False)
-        _persist_keepalive_autostart(False)
         if _account_ka.is_running():
             _account_ka.stop()
-        if _ka.is_running():
-            _ka.stop()
         cfg = _app_state["cfg"]
         if cfg.get("access_token"):
             try:
