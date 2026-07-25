@@ -7,8 +7,8 @@
 
 > 云电脑空闲一段时间容易被系统回收。本工具在你自己的电脑上登录账号、选桌面，按厂商走两条保活链路之一，把桌面顶住。  
 > 适用于 **公众移动云电脑（ecloud）**：  
-> - **CMSSZTE / ZTE / ZTEECLOUD**（中兴 / CMSS uSmartView）→ **Path B**（协议心跳 + 状态核对）  
-> - **H3C 及其它非 CMSSZTE** → **HTTP** 桌面保活链路  
+> - **CMSSZTE**（CMSS uSmartView）→ **Path B**（协议心跳 + 状态核对）  
+> - **ZTE / ZTEECLOUD / H3C 及其它** → **HTTP** 桌面保活链路（**ZTE ≠ CMSSZTE**，勿混） 
 > **不支持** VMware Tools（vmtool）以及爱家账号。本工具只做保活，不提供远程桌面画面操作。
 
 你不需要会写代码。大多数情况下：**先装环境 → 逐条运行命令 → 按提示输入账号/密码/验证码 → 选桌面 → 开始保活**（登录步骤不能「无交互一键粘贴」）。
@@ -147,8 +147,8 @@ python main.py desktop-keepalive
 
 ```text
 login → 选桌面 → 开机(power first) → 按 origin 分流
-  · CMSSZTE / ZTE / ZTEECLOUD → Path B
-  · H3C / 其它非空 origin      → HTTP
+  · CMSSZTE only              → Path B
+  · ZTE / ZTEECLOUD / H3C / 其它 → HTTP（ZTE ≠ CMSSZTE）
   · --legacy-http 强制 HTTP；--force-path-b 强制 Path B；--no-power 跳过开机
 ```
 
@@ -423,8 +423,8 @@ systemctl --user status ecloud-spice-keepalive.service
 1. 登录拿 token  
 2. 选桌面 → **先开机**（`operate=available`，已开机则跳过）  
 3. 看桌面 `originCompanyCode` 分流：  
-   - CMSSZTE / ZTE / ZTEECLOUD → Path B 协议心跳 + 状态核对  
-   - H3C 等 → HTTP 桌面保活  
+   - **CMSSZTE only** → Path B 协议心跳 + 状态核对  
+   - **ZTE / ZTEECLOUD / H3C 等** → HTTP 桌面保活（ZTE 不是 CMSSZTE）  
 4. 按固定间隔重复，降低「空闲被回收」的概率  
 
 本工具**不是**远程桌面软件，不会投屏/键鼠进云电脑；两条链路（Path B / HTTP）只负责定时心跳，尽量让桌面别被系统空闲回收。

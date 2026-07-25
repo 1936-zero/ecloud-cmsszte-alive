@@ -55,6 +55,7 @@ from .vdi_launcher import (
     plan_from_origin,
 )
 from .vendor_resolver import (
+    PATH_B_ORIGINS,
     UnknownVendor,
     VendorBinaryMissing,
     VendorError,
@@ -65,6 +66,7 @@ from .vendor_resolver import (
     normalize_origin,
     resolve,
     resolve_desktop,
+    uses_path_b_keepalive,
 )
 
 __all__ = [
@@ -82,6 +84,7 @@ __all__ = [
     "MODE_DETECT",
     "MODE_JSON",
     "MsgType",
+    "PATH_B_ORIGINS",
     "PathASession",
     "RSA_ENCRYPT_CHUNK",
     "RsaConnectError",
@@ -124,4 +127,5 @@ __all__ = [
     "score_samples",
     "supports_origin",
     "synthesize_samples",
+    "uses_path_b_keepalive",
 ]

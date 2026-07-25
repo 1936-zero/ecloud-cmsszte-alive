@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from unittest.mock import patch
 
 from l3.vendor_resolver import (
+    PATH_B_ORIGINS,
     UnknownVendor,
     VendorBinaryMissing,
     VendorNotImplemented,
@@ -17,6 +18,7 @@ from l3.vendor_resolver import (
     normalize_origin,
     resolve,
     resolve_desktop,
+    uses_path_b_keepalive,
 )
 
 
@@ -118,6 +120,33 @@ class CatalogTests(unittest.TestCase):
         known = list_known()
         for k in ("CMSSZTE", "ZTE", "ZTEECLOUD", "H3C", "INSPUR"):
             self.assertIn(k, known)
+
+
+class PathBKeepaliveRoutingTests(unittest.TestCase):
+    """Desktop keepalive Path B is CMSSZTE-only (ZTE ≠ CMSSZTE)."""
+
+    def test_path_b_origins_only_cmsszte(self):
+        self.assertEqual(PATH_B_ORIGINS, frozenset({"CMSSZTE"}))
+        self.assertNotIn("ZTE", PATH_B_ORIGINS)
+        self.assertNotIn("ZTEECLOUD", PATH_B_ORIGINS)
+
+    def test_cmsszte_uses_path_b(self):
+        self.assertTrue(uses_path_b_keepalive("CMSSZTE"))
+        self.assertTrue(uses_path_b_keepalive("cmsszte"))
+        self.assertTrue(uses_path_b_keepalive("  CmssZte "))
+
+    def test_zte_and_zteecloud_use_http_not_path_b(self):
+        # LINUX DO: 公众版 origin=ZTE was wrongly forced onto Path B
+        self.assertFalse(uses_path_b_keepalive("ZTE"))
+        self.assertFalse(uses_path_b_keepalive("zte"))
+        self.assertFalse(uses_path_b_keepalive("ZTEECLOUD"))
+        self.assertFalse(uses_path_b_keepalive("ZTEECloud"))
+
+    def test_h3c_and_empty_not_path_b(self):
+        self.assertFalse(uses_path_b_keepalive("H3C"))
+        self.assertFalse(uses_path_b_keepalive("INSPUR"))
+        self.assertFalse(uses_path_b_keepalive(""))
+        self.assertFalse(uses_path_b_keepalive(None))
 
 
 if __name__ == "__main__":

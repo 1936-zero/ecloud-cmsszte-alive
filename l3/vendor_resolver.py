@@ -49,6 +49,21 @@ def normalize_origin(code: Optional[str]) -> str:
     return str(code).strip().upper()
 
 
+# Path B (SPICE HEART) desktop keepalive — CMSSZTE only.
+# ZTE / ZTEECLOUD are different products (not CMSS uSmartView Path B);
+# they must use HTTP desktopUptime. Do NOT conflate with CMSSZTE.
+PATH_B_ORIGINS = frozenset({"CMSSZTE"})
+
+
+def uses_path_b_keepalive(origin_company_code: Optional[str]) -> bool:
+    """True only for CMSSZTE Path B. Empty origin → False (caller decides legacy).
+
+    ZTE / ZTEECLOUD / H3C / others → False (HTTP).
+    """
+    code = normalize_origin(origin_company_code)
+    return code in PATH_B_ORIGINS
+
+
 def _stub(
     vendor_id: str,
     service_name: str,

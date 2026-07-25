@@ -678,11 +678,11 @@ def cmd_logout(args):
 
 
 def cmd_desktop_keepalive(args):
-    """Desktop keepalive with vendor routing (#75fixaj).
+    """Desktop keepalive with vendor routing (#75fixaj / path_b origin fix).
 
     Flow: login → resolve desktop → power-on(preflight path) →
-      CMSSZTE/ZTE → SPICE path_B (claim=false)
-      non-CMSSZTE (H3C etc.) → pure HTTP desktopUptime
+      CMSSZTE only → SPICE path_B (claim=false)
+      ZTE / ZTEECLOUD / H3C / others → pure HTTP desktopUptime
 
     --legacy-http: force HTTP loop regardless of vendor.
     --force-path-b: force Path B regardless of vendor (needs plain).
@@ -746,10 +746,12 @@ def cmd_desktop_keepalive(args):
     force_http = bool(getattr(args, "legacy_http", False))
     force_path_b = bool(getattr(args, "force_path_b", False))
 
-    # Vendor routing: CMSSZTE/ZTEECloud/ZTE → path_b; else → http
-    is_cmss = origin_u in ("CMSSZTE", "ZTEECLOUD", "ZTE")
-    use_http = force_http or (not force_path_b and origin_u and not is_cmss)
-    # Unknown origin with no force: keep historical default path_b
+    # Vendor routing: Path B = CMSSZTE only. ZTE/ZTEECLOUD ≠ CMSSZTE → HTTP.
+    from l3.vendor_resolver import uses_path_b_keepalive
+
+    is_path_b = uses_path_b_keepalive(origin_u)
+    use_http = force_http or (not force_path_b and origin_u and not is_path_b)
+    # Unknown/empty origin with no force: keep historical default path_b
     if not origin_u and not force_http:
         use_http = False
 

@@ -1112,7 +1112,10 @@ class AccountRuntime:
                 self._cfg["updated_at"] = _now_iso()
                 self._save_cfg()
 
-        # #75fixaj: CMSSZTE/ZTEECloud → path_b; others (H3C etc.) → pure HTTP
+        # Path B = CMSSZTE only. ZTE/ZTEECLOUD are different vendors → HTTP.
+        # (LINUX DO report: 公众版 origin=ZTE was wrongly forced onto Path B.)
+        from l3.vendor_resolver import uses_path_b_keepalive
+
         origin = ""
         if matched_desktop is not None:
             origin = str(getattr(matched_desktop, "origin_company_code", "") or "")
@@ -1127,15 +1130,9 @@ class AccountRuntime:
             except Exception:
                 origin = ""
         origin_u = origin.strip().upper()
-        mode = (
-            "path_b"
-            if origin_u in ("CMSSZTE", "ZTEECLOUD", "ZTE")
-            else "http"
-        )
-        # When origin unknown but user force-path-b not set, default path_b only
-        # if historical default; prefer http for safety on unknown non-CMSS.
-        # Spec: CMSSZTE → PathB / non-CMSS → HTTP. Unknown → try path_b only if
-        # no origin hint at all was common for single-desktop CMSS accounts.
+        mode = "path_b" if uses_path_b_keepalive(origin_u) else "http"
+        # Spec: CMSSZTE → PathB / ZTE·ZTEECLOUD·H3C·其它 → HTTP.
+        # Empty origin → legacy path_b (old single-vendor CMSS accounts).
         if not origin_u:
             mode = "path_b"  # legacy single-vendor accounts
 
