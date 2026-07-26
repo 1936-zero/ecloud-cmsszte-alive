@@ -842,7 +842,13 @@ def run_spice_oracle_keepalive_loop(
             # --- HTTP oracle (status + uptime) — NOT keepalive ---
             if http is not None and instance_id:
                 ora = _oracle_once(http, instance_id=instance_id, machine_id=machine_id)
-                if ora.get("token_expired") and relogin_fn:
+                # 拿不到状态/在线时长【不是】判定 token 死活的依据——那是账号保活
+                # (account ping：getLoginUserInfo+getDeviceInfo 交叉验证)的职责。
+                # 只要 account ping 开着，oracle 一律不据 status/uptime 触发密码重登，
+                # 避免"桌面侧一次抖动/关机"被误判成 token 失效 → 多打一次 /login/verify
+                # (在被撤信任的账号上还可能引发短信)。仅当没有 account ping(独立桌面
+                # 保活，oracle 是唯一 token 触点)时，才保留一次兜底重登。
+                if ora.get("token_expired") and relogin_fn and not do_account_ping:
                     log.warning("[%d] token expired on oracle → relogin", rounds)
                     tok = relogin_fn()
                     if tok and hasattr(http, "set_token"):

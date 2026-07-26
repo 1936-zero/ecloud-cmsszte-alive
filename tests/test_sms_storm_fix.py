@@ -136,6 +136,50 @@ class TestUptimeTokenExpiryNotOverbroad(unittest.TestCase):
             )
 
 
+class TestOracleUptimeDoesNotOwnTokenLiveness(unittest.TestCase):
+    """拿不到状态/在线时长不应据此重登：account ping 开着时 oracle 一律不重登。
+
+    token 死活是账号保活(getLoginUserInfo+getDeviceInfo)的职责，不是 desktopUptime
+    的职责。account ping 关闭(独立桌面保活)时才保留一次兜底重登。
+    """
+
+    def _run_one_round(self, do_account_ping):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock, patch
+
+        relogin = Mock(return_value="new-token")
+        http = Mock()
+        http.set_token = Mock()
+        out = Path(tempfile.mkdtemp(prefix="ora_"))
+        plain = out / "connectstr.plain"
+        plain.write_text("dummy-connectstr-for-test\n")  # 存在即可(heart 已 patch)
+        # account ping 永远健康(token 没死)；oracle 却报 token_expired
+        with patch.object(sok, "_account_ping",
+                          return_value={"ok": True, "token_expired": False}), \
+             patch.object(sok, "_oracle_once",
+                          return_value={"token_expired": True, "oracle_ok": False,
+                                        "resource_status": "", "uptime": ""}), \
+             patch.object(sok, "run_path_b_keepalive",
+                          return_value={"heart_count": 1, "error": None}):
+            sok.run_spice_oracle_keepalive_loop(
+                http=http, instance_id="CCA-1", machine_id="m",
+                plain=plain, pre=out, post=out,
+                heart_listen=0.0, interval=0, max_rounds=1, out_dir=out,
+                relogin_fn=relogin, do_account_ping=do_account_ping,
+                auto_remint=False, mid_session_reconnect=False,
+            )
+        return relogin
+
+    def test_account_ping_on_oracle_never_relogins(self):
+        relogin = self._run_one_round(do_account_ping=True)
+        relogin.assert_not_called()  # oracle 的 uptime/status 错误不再触发重登
+
+    def test_account_ping_off_oracle_relogins_as_fallback(self):
+        relogin = self._run_one_round(do_account_ping=False)
+        relogin.assert_called()  # 独立桌面保活时 oracle 是唯一 token 触点，兜底重登
+
+
 class TestHeadlessLoginNeverSendsSms(unittest.TestCase):
     """systemd/headless relogin 命中 NEED_*_SMS 时：不发短信、抛 ManualAuthRequired。
 
