@@ -153,30 +153,62 @@ def _oracle_once(
         if out.get("resource_status"):
             out["oracle_ok"] = True
 
+    # 会话已被资源面证明存活（拿到状态或 oracle_ok）→ 某个子接口的 token 报错属误报，
+    # 清掉 token_expired，避免明明活着还去密码重登（触发风控短信）。
+    if out.get("oracle_ok") or out.get("resource_status"):
+        out["token_expired"] = False
+
     return out
 
 
 def _account_ping(http: Any) -> Dict[str, Any]:
-    """Lightweight L1 token touch (not desktop keepalive)."""
+    """Lightweight L1 token touch (not desktop keepalive).
+
+    ⚠️ 单个接口 401 【不能】判定 token 死。真网实测 /user/getLoginUserInfo 会对仍然
+    有效的 token 间歇性返回「[401] token失效」（端点级风控/单会话态），同一 token 的
+    /user/getDeviceInfo 与 SPICE 会话（heart=True）在同一秒内仍成功。若据此密码重登，
+    会每 ~30 分钟打一次 /login/verify → 触发服务端风控 → 手机设备信任短信轰炸。
+    故：getLoginUserInfo 报 token 失效时，先用 getDeviceInfo 复核；只有【两端都失效】
+    才判 token_expired=True 去重登。
+    """
     out = {"ok": False, "error": None, "token_expired": False}
     try:
         import config  # noqa: WPS433
-        from ecloud_client import EcloudError  # noqa: WPS433
+        from ecloud_client import EcloudError as _EE  # noqa: WPS433
+    except Exception as e:  # noqa: BLE001
+        out["error"] = f"import:{type(e).__name__}:{e}"
+        return out
 
+    def _is_tok(exc) -> bool:
+        if not isinstance(exc, _EE):
+            return False
+        msg = (getattr(exc, "message", "") or "").lower()
+        return any(h in msg for h in ("token", "失效", "未登录", "expire", "401", "授权"))
+
+    # 1) 主探针
+    try:
         http.post(config.Endpoint.USER_GET_INFO)
         out["ok"] = True
+        return out
     except Exception as e:  # noqa: BLE001
         out["error"] = f"{type(e).__name__}:{e}"
-        try:
-            from ecloud_client import EcloudError as _EE
+        if not _is_tok(e):
+            # 非 token 错误（瞬时/5xx）→ 不是 token 死，不重登
+            return out
 
-            if isinstance(e, _EE):
-                msg = (e.message or "").lower()
-                out["token_expired"] = any(
-                    h in msg for h in ("token", "失效", "未登录", "expire", "401", "授权")
-                )
-        except Exception:
-            pass
+    # 2) getLoginUserInfo 报 token 失效 → 用 getDeviceInfo 复核会话是否真的死了
+    try:
+        http.post(config.Endpoint.USER_GET_DEVICE_INFO)
+        # 另一接口成功 → 会话仍有效 → 单端 401 属误报，绝不重登
+        out["ok"] = True
+        out["error"] = None
+        out["token_expired"] = False
+    except Exception as e2:  # noqa: BLE001
+        if _is_tok(e2):
+            # 两端都 token 失效 → 真失效，允许重登
+            out["token_expired"] = True
+        else:
+            out["error"] = f"{type(e2).__name__}:{e2}"
     return out
 
 

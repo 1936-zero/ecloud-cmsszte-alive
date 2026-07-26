@@ -41,9 +41,19 @@ class KeepaliveOutcome:
 
 
 def keepalive_probe(http: EcloudHttpUtil) -> KeepaliveOutcome:
-    """执行一次保活并返回结果 + 真实错误（供 CLI/WebUI 打可诊断日志）。"""
+    """执行一次保活并返回结果 + 真实错误（供 CLI/WebUI 打可诊断日志）。
+
+    ⚠️ 关键：单个接口返回 401/token失效【不能】直接判定 token 死了。真网实测
+    /user/getLoginUserInfo 会对同一个仍然有效的 token 间歇性返回「[401] token失效」
+    （端点级风控/单会话态），而同一 token 的 /user/getDeviceInfo、SPICE 会话在
+    同一秒内仍然成功。若据单点 401 就密码重登，会每 10~20 分钟打一次 /login/verify，
+    触发服务端风控 → 手机短信轰炸。
+    因此：只要【任一】接口成功 → 会话有效 → ok=True，绝不重登；只有【全部】接口
+    失败且其中至少一个是 token 失效错误时，才判 ok=False 触发重登。
+    """
     success = False
-    last_err = ""
+    token_err = ""   # token 失效样错误：仅当【全部接口失败】时才据此重登
+    last_err = ""    # 最近一个非 token 错误（用于 None 分支的诊断日志）
     # 1. 用户信息
     try:
         info = http.post(config.Endpoint.USER_GET_INFO)
@@ -53,8 +63,9 @@ def keepalive_probe(http: EcloudHttpUtil) -> KeepaliveOutcome:
         detail = f"[{e.code}] {e.message}"
         log.warning("USER_GET_INFO failed: %s", detail)
         if _is_token_expired(e):
-            return KeepaliveOutcome(ok=False, error=detail)
-        last_err = detail
+            token_err = token_err or detail
+        else:
+            last_err = detail
 
     # 2. 桌面列表
     try:
@@ -65,8 +76,9 @@ def keepalive_probe(http: EcloudHttpUtil) -> KeepaliveOutcome:
         detail = f"[{e.code}] {e.message}"
         log.warning("USER_GET_DEVICE_INFO failed: %s", detail)
         if _is_token_expired(e):
-            return KeepaliveOutcome(ok=False, error=detail)
-        last_err = detail
+            token_err = token_err or detail
+        else:
+            last_err = detail
 
     # 3. 探针上报（模拟一条登录探针事件；失败不影响保活判定）
     try:
@@ -75,13 +87,24 @@ def keepalive_probe(http: EcloudHttpUtil) -> KeepaliveOutcome:
     except EcloudError as e:
         detail = f"[{e.code}] {e.message}"
         log.warning("PROBE_QKK_BATCHPUSH failed: %s", detail)
-        if not last_err:
+        if _is_token_expired(e):
+            token_err = token_err or detail
+        elif not last_err:
             last_err = detail
 
     if success:
+        # 任一接口成功 → 会话仍有效。若同时看到过某接口的 token 失效样报错，
+        # 那是端点级风控/单点抖动，记为 debug 但【绝不】重登（否则密码重登风暴）。
+        if token_err:
+            log.debug(
+                "token-like error on one endpoint but session is alive "
+                "(another probe succeeded) → NOT relogin: %s", token_err,
+            )
         return KeepaliveOutcome(ok=True)
-    # token 失效已在上面 early-return；此处 success=False 只意味着本轮全是非
-    # token 错误（瞬时/服务端故障）→ None，避免误触发密码重登风暴。
+    if token_err:
+        # 全部接口失败，且至少一个是 token 失效 → 真失效，需重登刷新 token。
+        return KeepaliveOutcome(ok=False, error=token_err)
+    # 全部失败但均为非 token 错误（瞬时/服务端故障）→ None，避免误触发密码重登。
     return KeepaliveOutcome(ok=None, error=last_err)
 
 
