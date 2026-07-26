@@ -101,7 +101,11 @@ def register_account_routes(app: Flask) -> None:
             if not password:
                 password = str(acc._cfg.get("password") or acc._password or "")
             result = acc.login(username, password)
-            return jsonify({**result, "account": acc.public_meta()})
+            # H5: never send the full cloud access_token to the browser. The
+            # in-process relogin path reads it from acc.login()'s return value
+            # directly; the HTTP response must not carry it.
+            safe = {k: v for k, v in result.items() if k != "access_token"}
+            return jsonify({**safe, "account": acc.public_meta()})
 
         except Exception as e:
             # #75fixal: account login must return JSON 200 with failed, never 500
@@ -129,7 +133,9 @@ def register_account_routes(app: Flask) -> None:
         code = str(data.get("code") or data.get("verification_code") or "")
         login_type = str(data.get("login_type") or "").strip()
         result = acc.verify_sms(mobile=mobile, code=code, login_type=login_type)
-        return jsonify({**result, "account": acc.public_meta()})
+        # H5: strip full access_token from the browser-facing response.
+        safe = {k: v for k, v in result.items() if k != "access_token"}
+        return jsonify({**safe, "account": acc.public_meta()})
 
     @app.route("/api/accounts/<account_id>/desktops", methods=["GET"])
     def api_accounts_desktops(account_id: str):
@@ -179,9 +185,12 @@ def register_account_routes(app: Flask) -> None:
             return err
         data = request.get_json(force=True, silent=True) or {}
         interval = data.get("interval")
-        result = acc.start_account_keepalive(
-            interval=int(interval) if interval is not None else None
-        )
+        if interval is not None:
+            try:
+                interval = int(interval)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "interval 必须是数字"}), 400
+        result = acc.start_account_keepalive(interval=interval)
         status = 200 if result.get("ok") else 400
         return jsonify({**result, "account": acc.public_meta()}), status
 
@@ -200,7 +209,10 @@ def register_account_routes(app: Flask) -> None:
         acc, err = _acc_or_404(account_id)
         if err:
             return err
-        since = int(request.args.get("since", 0) or 0)
+        try:
+            since = int(request.args.get("since", 0) or 0)
+        except (TypeError, ValueError):
+            since = 0
         return jsonify({"ok": True, "logs": acc.get_logs(since)})
 
     @app.route("/api/accounts/<account_id>/logs", methods=["DELETE"])
@@ -222,7 +234,10 @@ def register_account_routes(app: Flask) -> None:
 
     @app.route("/api/global-logs", methods=["GET"])
     def api_global_logs():
-        since = int(request.args.get("since", 0) or 0)
+        try:
+            since = int(request.args.get("since", 0) or 0)
+        except (TypeError, ValueError):
+            since = 0
         reg = get_registry()
         return jsonify({"ok": True, "logs": reg.get_global_logs(since)})
 

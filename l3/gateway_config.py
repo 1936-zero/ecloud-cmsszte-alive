@@ -225,6 +225,23 @@ def apply_device_gateway_from_clp(
         return cfg, None
     if gw is None:
         return cfg, None
+    # H3: a CLP with a csapip but no usable IPv4 cagList (empty / IPv6-only /
+    # unknown keys) parses to gw.cag_host == DEFAULT_CAG_HOST (stock GZ4) while
+    # still carrying source="device_customLoginParams". Because only_missing=False
+    # force-overwrites, that weak host would clobber an existing good region CAG
+    # and re-pin GZ4 on disk. Never overwrite a strong host with a weak one.
+    if not force and gateway_source_is_weak(gw.source, gw.cag_host):
+        cur_host = str(cfg.get("cag_host") or "")
+        if cur_host and not gateway_source_is_weak(
+            str(cfg.get("gateway_source") or ""), cur_host
+        ):
+            log.info(
+                "apply_device_gateway_from_clp: CLP host weak (%s); "
+                "preserving existing strong cag_host=%s",
+                gw.cag_host,
+                cur_host,
+            )
+            return cfg, None
     if not force:
         src = str(cfg.get("gateway_source") or "")
         # preserve explicit CLI/env-style strong sources
