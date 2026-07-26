@@ -183,7 +183,7 @@ def encrypt_with_redq_spki(
 
     raw = spki_or_blob
     if raw[:2] == VENDOR_HDR or raw[:4] == REDQ_MAGIC or (
-        SPKI_TAG in raw[:40] and not raw[:2] == b"\x30"
+        SPKI_TAG in raw[:40] and not raw.startswith(b"\x30")
     ):
         spki = extract_spki_from_redq(raw).spki
     else:
