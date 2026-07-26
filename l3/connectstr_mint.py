@@ -80,7 +80,7 @@ def _sha16(data: bytes | str) -> str:
 def _redact_plain(plain: str) -> str:
     """Never expose -k / long tokens in logs or public meta."""
     s = plain
-    s = re.sub(r"(?:(?<=\s)|^)-k\s+\S+", "-k <REDACTED>", s)
+    s = re.sub(r"(?:(?<=\s)|^)-k[ =]\s*\S+", "-k <REDACTED>", s)
     s = re.sub(r"(?:(?<=\s)|^)k=\S+", "k=<REDACTED>", s)
     s = re.sub(r"(--hv6)\s+\S+", r"\1 <REDACTED_V6>", s)
     # long hex blobs
@@ -214,14 +214,16 @@ def mint_connectstr(
                     "1", "true", "yes", "on",
                 }
 
-        sess = requests.Session()
-        sess.trust_env = bool(_trust_env())
-        resp = sess.post(
-            url,
-            headers=headers,
-            data=json.dumps(body, ensure_ascii=False),
-            timeout=req.timeout_s,
-        )
+        # context-managed so the socket/pool is released on every path
+        # (mint can be called repeatedly via auto-remint).
+        with requests.Session() as sess:
+            sess.trust_env = bool(_trust_env())
+            resp = sess.post(
+                url,
+                headers=headers,
+                data=json.dumps(body, ensure_ascii=False),
+                timeout=req.timeout_s,
+            )
     except requests.RequestException as e:
         base.error = f"http_error:{type(e).__name__}:{e}"
         return base

@@ -896,7 +896,7 @@ def run_spice_oracle_keepalive_loop(
                         if _stop_requested(should_stop):
                             log.info("[%d] should_stop during sleep — exit", rounds)
                             break
-                        time.sleep(min(0.5, end - time.time()))
+                        time.sleep(max(0.0, min(0.5, end - time.time())))
                     if _stop_requested(should_stop):
                         break
     except KeyboardInterrupt:

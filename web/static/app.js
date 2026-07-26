@@ -1113,7 +1113,8 @@
         showCErr(res.error || "启动失败");
         return;
       }
-      showCOk("已启动 Path B 保活 · HEART=" + String(res.heart != null ? res.heart : (res.keepalive && res.keepalive.heart)));
+      var hb = (res.heart != null ? res.heart : (res.keepalive && res.keepalive.heart));
+      showCOk("已启动 Path B 保活" + (hb != null ? " · HEART=" + String(hb) : ""));
       loadAccounts();
       pullGlobalLogs(true);
     }).catch(function (e) {
