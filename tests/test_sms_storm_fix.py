@@ -106,5 +106,42 @@ class TestOracleAliveClearsTokenExpired(unittest.TestCase):
             desktop_session.DesktopSession = orig_session
 
 
+class TestHeadlessLoginNeverSendsSms(unittest.TestCase):
+    """systemd/headless relogin 命中 NEED_*_SMS 时：不发短信、抛 ManualAuthRequired。
+
+    这是设备信任短信轰炸的直接根因守卫：旧代码在 systemd 服务里每次重启都会
+    login.send_sms 发一条设备信任验证码，永远无人输入 → 退出 → 重启 → 再发。
+    """
+
+    def _run(self, status):
+        import main
+        from unittest.mock import MagicMock, patch
+
+        res = {"status": status, "mobile": "18701080357", "login_code": None}
+        cfg = {"username": "u", "password": "p"}
+        with patch.object(main.login, "login_with_password", return_value=res), \
+             patch.object(main.login, "send_sms") as send_sms, \
+             patch.object(main.login, "send_two_factor_sms") as send_2fa, \
+             patch.object(main, "_stdin_is_interactive", return_value=False), \
+             patch.object(main, "build_client", return_value=MagicMock()), \
+             patch.object(main, "save_config"):
+            with self.assertRaises(main.ManualAuthRequired):
+                main.do_login(cfg)
+            self.assertEqual(send_sms.call_count, 0)
+            self.assertEqual(send_2fa.call_count, 0)
+
+    def test_device_trust_headless_no_sms(self):
+        import login
+        self._run(login.LoginResult.NEED_DEVICE_TRUST)
+
+    def test_two_factor_headless_no_sms(self):
+        import login
+        self._run(login.LoginResult.NEED_TWO_FACTOR)
+
+    def test_enhanced_headless_no_sms(self):
+        import login
+        self._run(login.LoginResult.NEED_ENHANCED_SMS)
+
+
 if __name__ == "__main__":
     unittest.main()

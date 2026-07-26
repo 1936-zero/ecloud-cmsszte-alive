@@ -2,6 +2,13 @@
 Description=public-ecloud SPICE path_B keepalive (claim=false)
 After=network-online.target
 Wants=network-online.target
+# CRITICAL (短信轰炸防护)：若 token 失效且设备信任被服务端撤销，登录返回 30002009
+# 会触发一条设备信任短信。无 StartLimit 时 Restart=on-failure 每 30s 重启一次 →
+# 每次重登再发一条短信 → 验证码轰炸。限制 10 分钟内最多 3 次重启，超限 systemd
+# 放弃(进入 failed，需人工 `systemctl --user reset-failed` 恢复)，最坏从无限降到 3 条。
+# (StartLimit* 属于 [Unit]，放 [Service] 无效。)
+StartLimitIntervalSec=600
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -11,6 +18,8 @@ EnvironmentFile=-%h/ecloud-cmsszte-alive/packaging/systemd/ecloud-spice-keepaliv
 ExecStart=%h/ecloud-cmsszte-alive/bin/public-spice-keepalive run
 Restart=on-failure
 RestartSec=30
+# 需人工短信验证时应用以退出码 3 干净退出；视为“成功”，systemd 不再重启。
+SuccessExitStatus=3
 # Hard pins (app also enforces):
 # production_claim=false dual_evidence_ok=false forbid jtydn/aijia
 

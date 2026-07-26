@@ -76,6 +76,23 @@ def save_config(cfg: dict) -> None:
         raise
 
 
+class ManualAuthRequired(Exception):
+    """登录需要人工短信验证（设备信任/二次/增强）但当前无交互终端。
+
+    抛出它让 keepalive 以退出码 3 干净退出，而不是崩溃(exit 1)进入 systemd
+    restart 循环——后者每次重启都会重登并触发一条设备信任短信 → 验证码轰炸。
+    systemd 单元里配 SuccessExitStatus=3，收到 3 即视为成功、不再重启。
+    """
+
+
+def _stdin_is_interactive() -> bool:
+    """True only with a real TTY on stdin (systemd/pipe/docker-exec → False)."""
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except Exception:
+        return False
+
+
 def _ensure_interactive(action: str = "登录") -> None:
     """Non-TTY must not fall into input()/EOFError (systemd/pipe/Docker exec)."""
     if not sys.stdin.isatty():
@@ -142,6 +159,30 @@ def do_login(cfg: dict):
 
     status = result["status"]
     login_code = result.get("login_code")
+
+    # 关键防护（短信轰炸根因）：设备信任/二次/增强 都需要人工输入短信验证码。
+    # 在无交互终端（systemd 服务 / headless / 无 stdin）下，绝不能进入这些分支——
+    # 否则每次都会 send_sms 发一条验证码，而验证码永远无人输入 → 进程退出 →
+    # systemd 30s 后重启 → 再发一条 …… 造成每 ~30s 一条的设备信任短信轰炸。
+    # 此处直接拦截：不发短信、清楚报错、返回 None（保活将停在“需人工信任”态，
+    # 请到 WebUI 或交互式 CLI 手动完成一次设备信任，成功后 token 写回即可继续）。
+    _sms_statuses = (
+        login.LoginResult.NEED_DEVICE_TRUST,
+        login.LoginResult.NEED_TWO_FACTOR,
+        login.LoginResult.NEED_ENHANCED_SMS,
+    )
+    if status in _sms_statuses and not _stdin_is_interactive():
+        log.error(
+            "登录需要短信验证(%s: mobile=%s)，但当前为非交互环境"
+            "(systemd/headless，无 stdin)。已【跳过发送短信】以避免验证码轰炸。"
+            "请在 WebUI 或交互式 CLI 手动完成一次设备信任/验证，"
+            "成功后 access_token 会写回配置，保活即可自动继续。",
+            status, result.get("mobile"),
+        )
+        # 干净退出信号：让最外层以 exit 3 结束，systemd(SuccessExitStatus=3)不再重启，
+        # 从而不会每 30s 重登再发一条短信。
+        raise ManualAuthRequired(f"{status}:{result.get('mobile')}")
+
     if status == login.LoginResult.NEED_DEVICE_TRUST:
         # 真网 30002009 的 body.code 常为 null；官方仍调用 trustDevice
         log.info("need device trust. mobile: %s login_code_present=%s",
@@ -1585,6 +1626,13 @@ def main():
          "web": cmd_web}[args.cmd](args)
     except KeyboardInterrupt:
         log.info("interrupted")
+    except ManualAuthRequired as e:
+        # 需人工短信验证：干净退出(3)，避免 systemd 重启循环再触发设备信任短信。
+        log.error(
+            "需要人工短信验证(%s)。已停止自动重登以避免验证码轰炸；"
+            "请在 WebUI 或交互式 CLI 手动完成一次设备信任后再启用保活。", e,
+        )
+        sys.exit(3)
     except EcloudError as e:
         log.error("api error: %s", e)
         sys.exit(1)
