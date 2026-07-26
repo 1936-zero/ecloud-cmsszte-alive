@@ -6,6 +6,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -110,6 +111,49 @@ class TestAsyncStartKeepalive(unittest.TestCase):
                 break
             time.sleep(0.01)
         self.assertFalse(acc.public_meta().get("starting"))
+
+
+class TestWebUiKeepaliveTristate(unittest.TestCase):
+    """WebUI account keepalive honours keepalive_once's tri-state."""
+
+    def _manager(self):
+        from web.keepalive_manager import AccountKeepaliveManager
+
+        m = AccountKeepaliveManager()
+        m._running = True
+        return m
+
+    def test_transient_none_does_not_relogin(self):
+        """None (all-fail, non-token) -> retry next round, NO password relogin."""
+        m = self._manager()
+        relogin = Mock(return_value="tok")
+        with patch(
+            "web.keepalive_manager.account_keepalive.keepalive_once",
+            return_value=None,
+        ) as ka_once, patch(
+            "web.keepalive_manager.time.sleep",
+            side_effect=lambda _s: m._stop_event.set(),
+        ):
+            m._run(Mock(), 1, relogin)
+        ka_once.assert_called_once()
+        relogin.assert_not_called()
+
+    def test_token_expiry_false_still_relogins(self):
+        """False (real token expiry) -> relogin + refresh token, then retry."""
+        m = self._manager()
+        fake_http = Mock()
+        relogin = Mock(return_value="fresh-token")
+        with patch(
+            "web.keepalive_manager.account_keepalive.keepalive_once",
+            side_effect=[False, True],
+        ) as ka_once, patch(
+            "web.keepalive_manager.time.sleep",
+            side_effect=lambda _s: m._stop_event.set(),
+        ):
+            m._run(fake_http, 1, relogin)
+        self.assertEqual(ka_once.call_count, 2)
+        relogin.assert_called_once()
+        fake_http.set_token.assert_called_once_with("fresh-token")
 
 
 if __name__ == "__main__":
