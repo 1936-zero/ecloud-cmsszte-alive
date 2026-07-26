@@ -262,6 +262,8 @@ def path_b_connect(
             "hv6_len": len(hv6),
         }
     )
+    s = None
+    tls = None
     try:
         s = socket.create_connection((host, cag_port), timeout=5)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -549,6 +551,18 @@ def path_b_connect(
             pass
     except Exception as e:
         res.error = f"{type(e).__name__}:{e}"
+    finally:
+        # H1: release the fd on every exit path. Success/ztec paths may have
+        # closed already; close() is idempotent, and closing tls closes the
+        # underlying socket. Without this, any mid-connect exception leaked one
+        # socket per round → fd exhaustion over a long soak.
+        try:
+            if tls is not None:
+                tls.close()
+            elif s is not None:
+                s.close()
+        except Exception:
+            pass
     return res
 
 

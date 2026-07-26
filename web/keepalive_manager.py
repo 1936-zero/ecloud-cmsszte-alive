@@ -250,6 +250,25 @@ class AccountKeepaliveManager:
 
     def start(self, http: EcloudHttpUtil, interval: int = 300, relogin_fn=None) -> bool:
         """启动账号登录态保活线程。已在运行则返回 False。"""
+        # H4/#75fixai (account-level): a prior non-blocking stop() may have set
+        # _running=False while its worker is still finishing a network round.
+        # Orphan that dying thread via its own (already-set) Event, then hand the
+        # NEW worker a FRESH per-worker Event. Never clear() a shared Event that a
+        # live old thread could still be polling — that used to resurrect it and
+        # run two workers at once (KeepaliveManager was fixed; this was not).
+        with self._lock:
+            if self._running:
+                return False
+            old = self._thread if (self._thread and self._thread.is_alive()) else None
+        if old is not None:
+            self._stop_event.set()
+            old.join(timeout=2.0)
+            if old.is_alive():
+                self._log("WARN", "上一轮账号保活线程仍在收尾，已孤儿化并启动新轮次")
+                with self._lock:
+                    self._thread = None
+
+        stop_ev = threading.Event()
         with self._lock:
             if self._running:
                 return False
@@ -260,11 +279,11 @@ class AccountKeepaliveManager:
             self._last_success_at = None
             self._consecutive_errors = 0
             self._started_at = datetime.now()
-            self._stop_event.clear()
+            self._stop_event = stop_ev
 
         self._thread = threading.Thread(
             target=self._run,
-            args=(http, interval, relogin_fn),
+            args=(http, interval, relogin_fn, stop_ev),
             daemon=True,
             name="account-keepalive",
         )
@@ -293,8 +312,13 @@ class AccountKeepaliveManager:
         ).start()
         return True
 
-    def _run(self, http: EcloudHttpUtil, interval: int, relogin_fn):
-        while not self._stop_event.is_set():
+    def _run(self, http: EcloudHttpUtil, interval: int, relogin_fn, stop_ev=None):
+        # H4: poll the per-worker Event handed in by start(); an orphaned old
+        # thread keeps its own (set) Event and exits, so it can never observe a
+        # fresh start()'s Event and keep looping.
+        if stop_ev is None:
+            stop_ev = self._stop_event
+        while not stop_ev.is_set():
             with self._lock:
                 self._rounds += 1
                 current_round = self._rounds
@@ -364,12 +388,16 @@ class AccountKeepaliveManager:
                 self._log("ERROR", f"[{current_round}] 账号保活异常: {msg}")
 
             for _ in range(max(1, int(interval))):
-                if self._stop_event.is_set():
+                if stop_ev.is_set():
                     break
                 time.sleep(1)
 
+        # H4: only the still-current worker may flip _running=False. An orphaned
+        # old thread (whose Event was replaced by a newer start) must not clear a
+        # newer worker's running state.
         with self._lock:
-            self._running = False
+            if stop_ev is self._stop_event:
+                self._running = False
 
 
 class KeepaliveManager:

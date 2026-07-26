@@ -51,12 +51,29 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict) -> None:
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    # Atomic write: a crash / Ctrl-C mid-dump must not truncate cloud_pc.json,
+    # which holds the token + credentials across a multi-hour keepalive loop.
     try:
-        os.chmod(CONFIG_FILE, 0o600)
+        os.makedirs(os.path.dirname(os.path.abspath(CONFIG_FILE)) or ".", exist_ok=True)
     except OSError:
         pass
+    tmp = f"{CONFIG_FILE}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, CONFIG_FILE)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _ensure_interactive(action: str = "登录") -> None:
@@ -199,7 +216,8 @@ def cmd_login(args):
     cfg = load_config()
     token = do_login(cfg)
     if token:
-        log.info("token: %s...%s", token[:8], token[-6:])
+        # Do not print token fragments (INTERNAL policy: logs are path-only).
+        log.info("token acquired (len=%d)", len(token))
     sys.exit(0 if token else 1)
 
 
@@ -375,7 +393,12 @@ def _run_spice_oracle_entry(args, cfg, client, relogin_fn):
         try:
             from l3.gateway_config import resolve_gateway
 
-            _gw = resolve_gateway(try_client_discovery=True, allow_default=True)
+            # H2: use the in-memory cfg (already merged with the desktop CLP
+            # region CAG by _resolve_desktop_for_spice). Passing neither cfg nor
+            # cloud_pc_path made resolve_gateway re-read a CWD-relative
+            # ./cloud_pc.json — wrong file under CLOUD_PC_CONFIG_FILE / non-repo
+            # CWD → silent fall back to stock GZ4.
+            _gw = resolve_gateway(cfg=cfg, try_client_discovery=True, allow_default=True)
             host = str(_gw.cag_host or "")
             log.info(
                 "SPICE host from resolve_gateway: %s src=%s",
@@ -603,7 +626,16 @@ def cmd_path_b_keepalive(args):
         try:
             from l3.gateway_config import resolve_gateway
 
-            _pb_host = str(resolve_gateway(try_client_discovery=True, allow_default=True).cag_host or "")
+            # H2: read the actual config file (CONFIG_FILE honours
+            # CLOUD_PC_CONFIG_FILE / script dir), not a CWD-relative default.
+            _pb_host = str(
+                resolve_gateway(
+                    cloud_pc_path=CONFIG_FILE,
+                    try_client_discovery=True,
+                    allow_default=True,
+                ).cag_host
+                or ""
+            )
         except Exception:  # noqa: BLE001
             from l3.gateway_config import DEFAULT_CAG_HOST
 
