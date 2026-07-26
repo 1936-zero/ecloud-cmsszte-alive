@@ -93,6 +93,8 @@ def main() -> int:
     )
     i = 0
     t0 = time.time()
+    consec_fail = 0
+    max_consec_fail = 3  # tolerate transient EOF/timeout before ending the loop
     try:
         while True:
             if args.rounds and i >= args.rounds:
@@ -103,22 +105,29 @@ def main() -> int:
                 rh = recvn(s, 4, max(3.0, args.interval + 2))
                 if rh != b"\x0a\x00\x00\x00":
                     meta["fail"] += 1
+                    consec_fail += 1
                     meta["events"].append(
-                        {"i": i, "ok": False, "hex": rh.hex() if rh else "", "t": round(time.time() - t0, 2)}
+                        {"i": i, "ok": False, "hex": rh.hex() if rh else "",
+                         "consec_fail": consec_fail, "t": round(time.time() - t0, 2)}
                     )
                     meta["error"] = "heart_mismatch_or_eof"
-                    break
-                meta["ok"] += 1
-                if i % 20 == 0:
-                    meta["events"].append(
-                        {"i": i, "ok": True, "rtt_ms": int((time.time() - ti) * 1000), "t": round(time.time() - t0, 2)}
-                    )
-                    print(f"[gw-heart] i={i} ok={meta['ok']} rtt={int((time.time()-ti)*1000)}ms", flush=True)
+                    if consec_fail >= max_consec_fail:
+                        break
+                else:
+                    consec_fail = 0
+                    meta["ok"] += 1
+                    if i % 20 == 0:
+                        meta["events"].append(
+                            {"i": i, "ok": True, "rtt_ms": int((time.time() - ti) * 1000), "t": round(time.time() - t0, 2)}
+                        )
+                        print(f"[gw-heart] i={i} ok={meta['ok']} rtt={int((time.time()-ti)*1000)}ms", flush=True)
             except Exception as e:
                 meta["fail"] += 1
+                consec_fail += 1
                 meta["error"] = f"{type(e).__name__}:{e}"
-                meta["events"].append({"i": i, "err": meta["error"], "t": round(time.time() - t0, 2)})
-                break
+                meta["events"].append({"i": i, "err": meta["error"], "consec_fail": consec_fail, "t": round(time.time() - t0, 2)})
+                if consec_fail >= max_consec_fail:
+                    break
             rem = args.interval - (time.time() - ti)
             if rem > 0:
                 time.sleep(rem)

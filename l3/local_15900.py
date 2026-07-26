@@ -268,10 +268,11 @@ class Local15900Server:
                 pass
         for mid, sock in list(self.socket_list.items()):
             try:
-                sock.close()
+                if sock is not None:
+                    sock.close()
             except OSError:
                 pass
-            self.socket_list[mid] = None  # type: ignore[assignment]
+            self.socket_list.pop(mid, None)
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
