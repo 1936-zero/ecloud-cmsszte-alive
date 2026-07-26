@@ -865,7 +865,10 @@ def create_app() -> Flask:
 
     @app.route("/api/account-keepalive/logs")
     def api_account_ka_logs():
-        since = int(request.args.get("since", 0))
+        try:
+            since = int(request.args.get("since", 0))
+        except (TypeError, ValueError):
+            since = 0
         return jsonify({"logs": _account_ka.get_logs(since)})
 
     # -----------------------------------------------------------------------

@@ -101,8 +101,10 @@ def operate_desktop(http: EcloudHttpUtil, machine_id: str, machine_name: str,
     注意：后端未知 "startup"/"powerOn"；asar 客户端用 operate=available 表示开机。
     复刻 asar Ts→ri→POST /resource/operate。
     """
-    import os
-    sdk_type = 5 if os.uname().sysname == "Darwin" else 4
+    import platform
+    # os.uname() is POSIX-only and raises AttributeError on Windows (a supported
+    # client platform). platform.system() is cross-platform.
+    sdk_type = 5 if platform.system() == "Darwin" else 4
     return http.post(config.Endpoint.RESOURCE_OPERATE, {
         "machineId": machine_id,
         "machineName": machine_name,

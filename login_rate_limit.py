@@ -185,6 +185,9 @@ def record_attempt(username: str) -> dict[str, Any]:
                 "locked": True,
                 "unlock_in_sec": unlock_in,
                 "remaining_attempts": 0,
+                # this call did NOT record (already at max) — lets guard_login
+                # block a concurrent attempt that raced past check_locked.
+                "recorded": False,
             }
         ts.append(now)
         _state[user] = ts
@@ -219,8 +222,12 @@ def guard_login(username: str) -> dict[str, Any] | None:
     if locked:
         return locked
     st = record_attempt(username)
-    if st.get("locked") and st.get("count", 0) > MAX_ATTEMPTS:
-        # should not happen; defensive
+    # Block when this attempt was NOT actually recorded — i.e. the window was
+    # already full. Using `count > MAX` (never true) let a concurrent second
+    # login that raced past check_locked slip through unrecorded; keying on
+    # `recorded` blocks it without wrongly rejecting the legitimate Nth-of-MAX
+    # attempt (which IS recorded).
+    if st.get("locked") and not st.get("recorded", True):
         return check_locked(username)
     return None
 

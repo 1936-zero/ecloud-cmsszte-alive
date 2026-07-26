@@ -91,7 +91,16 @@ def login_with_password(http: EcloudHttpUtil, username: str, password: str) -> d
     # 响应里没 ticket 也没异常，按错误分类处理
     if isinstance(resp, dict) and resp.get("errorCode"):
         return _classify_dict_error(resp, username)
-    return {"status": LoginResult.SUCCESS, "access_token": None, "user_info": resp}
+    # No accessTicket, no errorCode, no exception: OK envelope without a usable
+    # token. Must NOT report SUCCESS with access_token=None — callers would take
+    # the success branch and treat None as the new token, silently keeping a
+    # stale/empty one.
+    return {
+        "status": LoginResult.FAILED,
+        "access_token": None,
+        "error": "登录响应缺少 accessTicket/accessToken",
+        "raw": resp,
+    }
 
 
 def _classify_login_error(e: EcloudError, username: str) -> dict:

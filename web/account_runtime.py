@@ -71,6 +71,17 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _path_nonempty(p) -> bool:
+    """True if p is a non-empty file. TOCTOU-safe: a worker thread may delete/
+    replace the plain between is_file() and stat() (remint) — treat the race as
+    'not ready' instead of letting FileNotFoundError 500 the whole account list.
+    """
+    try:
+        return p.is_file() and p.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def _safe_log_obj(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {
@@ -496,7 +507,7 @@ class AccountRuntime:
             "machine_id": cfg.get("machine_id") or "",
             "machine_name": cfg.get("machine_name") or "",
             "device_uid": (cfg.get("device_uid") or "")[:12],
-            "plain_ready": self.plain_path.is_file() and self.plain_path.stat().st_size > 0,
+            "plain_ready": _path_nonempty(self.plain_path),
             "keepalive_interval": interval_default,
             "account_keepalive_interval": account_interval,
             "keepalive": ka,
@@ -811,7 +822,7 @@ class AccountRuntime:
         return tok or None
 
     # ------------------------------------------------------------------ desktops
-    def list_desktops(self) -> dict:
+    def list_desktops(self, _relogin_attempted: bool = False) -> dict:
         if not self._cfg.get("access_token"):
             return {"error": "未登录", "desktops": []}
         http = self.get_http()
@@ -834,8 +845,11 @@ class AccountRuntime:
                 pass
             return {"desktops": result}
         except EcloudError as e:
-            if _token_maybe_expired(e) and self.relogin():
-                return self.list_desktops()
+            # bound to a single relogin retry — an upstream that keeps replying
+            # "token 失效" even after a fresh login must not recurse forever
+            # (RecursionError + a password-login storm past login_rate_limit).
+            if not _relogin_attempted and _token_maybe_expired(e) and self.relogin():
+                return self.list_desktops(_relogin_attempted=True)
             return {"error": e.message, "desktops": []}
 
     # ------------------------------------------------------------------ keepalive
@@ -963,7 +977,8 @@ class AccountRuntime:
                                         wait_s=_power_wait_s(),
                                         force=True,
                                     )
-                                    self._cfg = self._load_cfg() or self._cfg
+                                    with self._lock:
+                                        self._cfg = self._load_cfg() or self._cfg
                                     # #75fixad: soft already_powering / acted both OK
                                     if pr.acted or pr.skipped_reason in (
                                         "already_running",
@@ -1069,7 +1084,8 @@ class AccountRuntime:
                         wait_s=_power_wait_s(),
                         force=True,
                     )
-                    self._cfg = self._load_cfg() or self._cfg
+                    with self._lock:
+                        self._cfg = self._load_cfg() or self._cfg
                     self.log(
                         "INFO",
                         f"开机结果 acted={pr.acted} skip={pr.skipped_reason or '-'} "
