@@ -530,7 +530,7 @@
       /* #75fixap cardHtml：开始保活/停止保活 二合一 + 日志头常显 */
       /* #75fixaf: starting → 禁点「启动中…」；#75fixag: stopping → 「停止中…」 */
       /* #75fixak: 循环仍在跑时只显示停止（可中断）；running=false 才显示启动 */
-      var starting = !!(state.startingIds && state.startingIds[acc.id]);
+      var starting = !!(state.startingIds && state.startingIds[acc.id]) || !!acc.starting;
       var stopping = !!(state.stoppingIds && state.stoppingIds[acc.id]);
       var startStopBtn = running
         ? (stopping
@@ -619,6 +619,7 @@
       a.machine_id || "",
       a.keepalive_interval || "",
       a.last_error || "",
+      a.starting ? 1 : 0,
       k.running ? 1 : 0,
       k.last_error || k.error || "",
       k.health || "",
@@ -815,6 +816,12 @@
           list = [];
         }
       }
+      /* async start: once the server reports starting=true it owns the 启动中…
+         state; drop the client-side optimistic flag so the button can't get
+         stuck if a response is missed. */
+      list.forEach(function (a) {
+        if (a && a.starting === true && state.startingIds) delete state.startingIds[a.id];
+      });
       /* config modal open: never full re-render cards (input focus / draft state) */
       if (state.configPid && !forceFull) {
         state.accounts = list;
@@ -1111,20 +1118,22 @@
     }).then(function (res) {
       if (res.ok === false) {
         showCErr(res.error || "启动失败");
+        delete state.startingIds[id];
         return;
       }
-      var hb = (res.heart != null ? res.heart : (res.keepalive && res.keepalive.heart));
-      showCOk("已启动 Path B 保活" + (hb != null ? " · HEART=" + String(hb) : ""));
-      loadAccounts();
+      /* async start: server is now powering (starting=true). Keep 启动中… —
+         loadAccounts reconcile drops the optimistic flag once the server owns
+         the state, and the card renders 启动中… from acc.starting until done. */
+      showCOk("正在启动 Path B 保活…（开机/预检中，请稍候）");
       pullGlobalLogs(true);
     }).catch(function (e) {
       showCErr(e.message);
-    }).finally(function () {
       delete state.startingIds[id];
+    }).finally(function () {
       btn.disabled = false;
       btn.textContent = "启动保活";
       loadAccounts();
-      softPollBurst(4, 700); /* #75fixal */
+      softPollBurst(6, 1000); /* async start: poll powering→running */
     });
   }
 

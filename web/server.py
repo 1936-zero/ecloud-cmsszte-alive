@@ -194,6 +194,12 @@ def _ensure_account_keepalive_autostart(reason: str = "watchdog") -> bool:
     def _relogin():
         return _relogin_with_saved_credentials()
 
+    # Re-check under lock right before starting: a stop() that persisted
+    # autostart=False after our earlier is_running()/cfg check must win the race,
+    # otherwise the watchdog restarts keepalive the user just stopped.
+    with _lock:
+        if not _app_state["cfg"].get("account_keepalive_autostart"):
+            return False
     ok = _account_ka.start(http, interval=interval, relogin_fn=_relogin)
     if ok:
         log.info("account keepalive autostart recovered by %s: interval=%ds", reason, interval)
@@ -634,16 +640,24 @@ def create_app() -> Flask:
                 "login_code_present": bool(result.get("login_code")),
             }), ensure_ascii=False))
 
+            success = result["status"] == login.LoginResult.SUCCESS
+            token = result["access_token"] if success else None
+            # Do the cred + token write + save atomically so the autostart
+            # watchdog cannot swap _app_state["cfg"] between them (would drop the
+            # fresh token). _lock is non-reentrant → inline the token set instead
+            # of calling _set_token.
             with _lock:
                 _app_state["username"] = username
                 _app_state["password"] = password
                 _app_state["cfg"]["username"] = username
                 _app_state["cfg"]["password"] = password
+                if success:
+                    _app_state["cfg"]["access_token"] = token
+                    _save_cfg(_app_state["cfg"])
+                    if _app_state["http"]:
+                        _app_state["http"].set_token(token)
 
-            if result["status"] == login.LoginResult.SUCCESS:
-                token = result["access_token"]
-                _set_token(token)
-                _save_cfg(_app_state["cfg"])
+            if success:
                 return jsonify({"status": "success", "token": token[:20] + "..."})
 
             if result["status"] == login.LoginResult.NEED_DEVICE_TRUST:
@@ -886,9 +900,11 @@ def create_app() -> Flask:
                 login.logout(http)
             except Exception:
                 pass
-        cfg.pop("access_token", None)
-        _save_cfg(cfg)
+        # Clear + persist + drop client atomically so a concurrent relogin's
+        # _set_token can't re-persist a token over the logged-out state.
         with _lock:
+            _app_state["cfg"].pop("access_token", None)
+            _save_cfg(_app_state["cfg"])
             _app_state["http"] = None
         return jsonify({"ok": True})
 

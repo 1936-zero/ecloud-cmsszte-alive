@@ -62,7 +62,10 @@ class WebUiStatusTests(unittest.TestCase):
         self.assertEqual(server._app_state["cfg"]["username"], "user")
         self.assertEqual(server._app_state["cfg"]["password"], "password")
         self.assertEqual(server._app_state["cfg"]["access_token"], "fresh-token")
-        self.assertEqual(save_cfg.call_count, 2)
+        # api_login now writes cfg once, atomically under _lock (the previous
+        # redundant second _save_cfg outside the lock was removed as part of the
+        # cfg-race fix).
+        self.assertEqual(save_cfg.call_count, 1)
 
     def test_dashboard_path_serves_web_ui(self):
         app = server.create_app()

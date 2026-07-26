@@ -189,6 +189,9 @@ class AccountRuntime:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         self._lock = threading.RLock()
+        # Serializes relogin() only. Lock order is always _relogin_lock -> _lock
+        # (relogin is never invoked while _lock is held), so no deadlock.
+        self._relogin_lock = threading.Lock()
         self._http: EcloudHttpUtil | None = None
         self._cfg: dict = self._load_cfg()
         # login intermediate state (sms flow)
@@ -512,6 +515,9 @@ class AccountRuntime:
             "account_keepalive_interval": account_interval,
             "keepalive": ka,
             "account_keepalive": aka,
+            # True while the async start (power-on + preflight) is in flight so
+            # the UI can show 启动中… without the request thread blocking.
+            "starting": bool(getattr(self, "_ka_starting", False)),
             "last_error": ka.get("last_error") or aka.get("last_error") or "",
             "updated_at": cfg.get("updated_at") or "",
         }
@@ -810,16 +816,27 @@ class AccountRuntime:
         with self._lock:
             username = str(self._cfg.get("username") or self._username or "").strip()
             password = str(self._cfg.get("password") or self._password or "")
+            tok_before = str(self._cfg.get("access_token") or "")
         if not username or not password:
             self.log("ERROR", "重登失败：缺少已保存账号密码")
             return None
-        # Path B / AKA 轮次 relogin：成功明细不刷 global，避免淹没 heart/保活行
-        r = self.login(username, password, quiet=True)
-        if r.get("status") != "success":
-            return None
-        tok = r.get("access_token") or self._cfg.get("access_token") or ""
-        tok = str(tok).strip() if tok else ""
-        return tok or None
+        # Coalesce concurrent relogins. The AKA worker relogin_fn, the Path B
+        # worker relogin_fn and request threads (list_desktops retry) used to
+        # fire parallel password logins — duplicate SMS / server-side lockout,
+        # and a clobbered shared-client token mid-flight. Serialize them; if a
+        # peer already refreshed the token while we waited, reuse it.
+        with self._relogin_lock:
+            with self._lock:
+                tok_now = str(self._cfg.get("access_token") or "")
+            if tok_now and tok_now != tok_before:
+                return tok_now
+            # Path B / AKA 轮次 relogin：成功明细不刷 global，避免淹没 heart/保活行
+            r = self.login(username, password, quiet=True)
+            if r.get("status") != "success":
+                return None
+            tok = r.get("access_token") or self._cfg.get("access_token") or ""
+            tok = str(tok).strip() if tok else ""
+            return tok or None
 
     # ------------------------------------------------------------------ desktops
     def list_desktops(self, _relogin_attempted: bool = False) -> dict:
@@ -878,15 +895,29 @@ class AccountRuntime:
                 }
             self._ka_starting = True
 
-        try:
-            return self._start_keepalive_body(
-                instance_id=instance_id,
-                machine_id=machine_id,
-                interval=interval,
-            )
-        finally:
-            with self._lock:
-                self._ka_starting = False
+        # Non-blocking: power-on (~60s) + preflight uptime poll (~90s) run in a
+        # background thread so the Flask request thread returns immediately.
+        # The UI reflects progress via public_meta()['starting'] then the km
+        # status; the _ka_starting guard above still prevents a double-start.
+        def _bg_start():
+            try:
+                res = self._start_keepalive_body(
+                    instance_id=instance_id,
+                    machine_id=machine_id,
+                    interval=interval,
+                )
+                if not res.get("ok"):
+                    self.log("ERROR", f"保活启动失败: {res.get('error') or res}")
+            except Exception as e:  # noqa: BLE001
+                self.log("ERROR", f"保活启动异常: {_safe_public_err(str(e))}")
+            finally:
+                with self._lock:
+                    self._ka_starting = False
+
+        threading.Thread(
+            target=_bg_start, daemon=True, name=f"ka-start-{self.id}"
+        ).start()
+        return {"ok": True, "status": "starting", "starting": True}
 
     def _start_keepalive_body(
         self,
