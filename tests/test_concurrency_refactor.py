@@ -160,5 +160,62 @@ class TestWebUiKeepaliveTristate(unittest.TestCase):
         fake_http.set_token.assert_called_once_with("fresh-token")
 
 
+class TestKeepaliveAutoResume(unittest.TestCase):
+    """Persist keepalive_desired + resume it on WebUI startup."""
+
+    def test_start_keepalive_persists_desired(self):
+        import json
+
+        acc = _make_account()
+        with acc._lock:
+            acc._cfg = {
+                "username": "u", "password": "p",
+                "access_token": "tok", "instance_id": "CCA-1",
+            }
+        acc._start_keepalive_body = lambda **k: {"ok": True}  # no real network
+        res = acc.start_keepalive(instance_id="CCA-1", interval=300)
+        self.assertTrue(res.get("ok"))
+        self.assertTrue(acc._cfg.get("keepalive_desired"))
+        self.assertTrue(json.load(open(acc.config_path))["keepalive_desired"])
+
+    def test_stop_keepalive_clears_desired(self):
+        import json
+
+        acc = _make_account()
+        with acc._lock:
+            acc._cfg = {"keepalive_desired": True, "access_token": "tok"}
+            acc._save_cfg()
+        acc.stop_keepalive()
+        self.assertFalse(acc._cfg.get("keepalive_desired"))
+        self.assertFalse(json.load(open(acc.config_path))["keepalive_desired"])
+
+    def test_resume_only_desired_and_logged_in(self):
+        from web.account_runtime import AccountRegistry
+
+        reg = AccountRegistry(root=Path(tempfile.mkdtemp(prefix="reg_")))
+        reg.create(label="a1", username="15700000001", password="p")
+        reg.create(label="a2", username="15700000002", password="p")
+        reg.create(label="a3", username="15700000003", password="p")
+        accs = list(reg._accounts.values())
+        a1, a2, a3 = accs[0], accs[1], accs[2]
+        with a1._lock:  # desired + logged in -> resume
+            a1._cfg.update({"keepalive_desired": True, "access_token": "tok", "instance_id": "CCA-1"})
+        with a2._lock:  # not desired -> skip
+            a2._cfg.update({"keepalive_desired": False, "access_token": "tok"})
+        with a3._lock:  # desired but NOT logged in -> skip
+            a3._cfg.update({"keepalive_desired": True})
+            a3._cfg.pop("access_token", None)
+        for a in (a1, a2, a3):
+            a.start_keepalive = Mock(return_value={"ok": True, "status": "starting"})
+            a.start_account_keepalive = Mock(return_value={"ok": True})
+
+        n = reg.resume_desired_keepalive()
+
+        self.assertEqual(n, 1)
+        a1.start_keepalive.assert_called_once()
+        a2.start_keepalive.assert_not_called()
+        a3.start_keepalive.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
