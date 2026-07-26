@@ -141,8 +141,12 @@ class DesktopSession:
 
 
 def _is_token_expired(err: EcloudError) -> bool:
+    # 与 keepalive._is_token_expired 对齐：去掉过宽的 "access"（会误伤 accessKey /
+    # access denied / "no access to desktop" 等【非】token 错误）。拿不到在线时长时，
+    # 只有真正的 token 失效才应触发密码重登；桌面关机/instanceId 无效/瞬时错误绝不重登，
+    # 否则会白白多打一次 /login/verify（在设备信任被撤销的账号上还可能引发短信）。
     msg = (err.message or "").lower()
-    hints = ["token", "登录失效", "未登录", "请重新登录", "access", "授权", "过期"]
+    hints = ["token", "登录失效", "未登录", "请重新登录", "授权", "过期"]
     return any(h.lower() in msg for h in hints)
 
 

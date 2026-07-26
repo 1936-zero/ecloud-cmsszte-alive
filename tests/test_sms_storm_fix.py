@@ -106,6 +106,36 @@ class TestOracleAliveClearsTokenExpired(unittest.TestCase):
             desktop_session.DesktopSession = orig_session
 
 
+class TestUptimeTokenExpiryNotOverbroad(unittest.TestCase):
+    """desktopUptime 失败：只有真 token 错误才触发重登；非 token 错误绝不重登。"""
+
+    def test_real_token_error_flags_expired(self):
+        import desktop_session
+        for msg in ("token失效", "token验证失败", "登录失效", "请重新登录", "授权过期"):
+            self.assertTrue(
+                desktop_session._is_token_expired(
+                    EcloudError({"errorCode": "401", "errorMessage": msg})
+                ),
+                msg,
+            )
+
+    def test_non_token_errors_do_not_relogin(self):
+        import desktop_session
+        # 关机 / accessKey / access denied / instanceId 无效 → 不是 token 失效
+        for msg in (
+            "desktopUptime 未返回运行时长，桌面可能已关机",
+            "accessKey invalid",
+            "no access to desktop",
+            "instanceId 无效",
+        ):
+            self.assertFalse(
+                desktop_session._is_token_expired(
+                    EcloudError({"errorCode": "500", "errorMessage": msg})
+                ),
+                msg,
+            )
+
+
 class TestHeadlessLoginNeverSendsSms(unittest.TestCase):
     """systemd/headless relogin 命中 NEED_*_SMS 时：不发短信、抛 ManualAuthRequired。
 
