@@ -917,9 +917,27 @@ def create_app() -> Flask:
     return app
 
 
+def _start_multi_account_resume():
+    """WebUI 启动后，在后台线程恢复被标记 keepalive_desired 的多账号保活。
+
+    容器/宿主机重启后进程被换，保活线程结束且不自恢复；此处补上自动恢复，
+    使热更/重启对用户无感。放后台线程，避免拖慢 Flask 启动。
+    """
+    def _resume():
+        try:
+            n = get_registry().resume_desired_keepalive()
+            if n:
+                log.info("多账号保活自动恢复：%d 个账号", n)
+        except Exception:
+            log.exception("多账号保活自动恢复失败")
+
+    threading.Thread(target=_resume, daemon=True, name="ka-multi-resume").start()
+
+
 def run(host: str = "0.0.0.0", port: int = 8081):
     """启动 Flask 服务。默认 8081，与 Docker 方式 C 对齐。"""
     app = create_app()
     _start_keepalive_autostart_watchdog()
+    _start_multi_account_resume()
     log.info("Web UI 启动: http://%s:%d", host, port)
     app.run(host=host, port=port, debug=False, threaded=True)

@@ -894,6 +894,12 @@ class AccountRuntime:
                     "error": "该账号保活正在启动或已在运行",
                 }
             self._ka_starting = True
+            # 持久化"用户希望保活运行"，供 WebUI 重启后自动恢复（见
+            # AccountRegistry.resume_desired_keepalive）。记录本次 interval。
+            self._cfg["keepalive_desired"] = True
+            self._cfg["keepalive_interval"] = interval
+            self._cfg["updated_at"] = _now_iso()
+            self._save_cfg()
 
         # Non-blocking: power-on (~60s) + preflight uptime poll (~90s) run in a
         # background thread so the Flask request thread returns immediately.
@@ -1225,6 +1231,10 @@ class AccountRuntime:
         # #75fixag: always clear start reentrancy latch on stop
         with self._lock:
             self._ka_starting = False
+            # 用户主动停止 → 清除自动恢复意图，重启后不再自动拉起
+            self._cfg["keepalive_desired"] = False
+            self._cfg["updated_at"] = _now_iso()
+            self._save_cfg()
         ok = self.km.stop()
         # stop desktop also stops AKA; nest card-only then one global line
         aka_ok = self.stop_account_keepalive(to_global=False)
@@ -1459,6 +1469,54 @@ class AccountRegistry:
     def get(self, account_id: str) -> AccountRuntime | None:
         with self._lock:
             return self._accounts.get(account_id)
+
+    def resume_desired_keepalive(self) -> int:
+        """WebUI 启动时自动恢复被标记 keepalive_desired 且仍登录的账号保活。
+
+        容器/宿主机重启后进程会被换掉，保活线程随之结束、且不会自恢复。此方法
+        遍历各账号，对"用户希望运行且仍有 token"的账号恢复：先账号登录态保活
+        （token 保鲜），再桌面 Path B 保活（内部非阻塞、自起后台线程做开机/预检）。
+        每个账号独立 try，互不影响。返回成功发起恢复的账号数。
+        """
+        with self._lock:
+            accounts = list(self._accounts.values())
+        resumed = 0
+        for acc in accounts:
+            try:
+                cfg = acc._cfg
+                if not cfg.get("keepalive_desired") or not cfg.get("access_token"):
+                    continue
+                # 1) 账号登录态保活（幂等：已在运行会返回 already）
+                try:
+                    acc.start_account_keepalive(to_global=False)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("resume aka failed for %s: %s", acc.id, e)
+                # 2) 桌面 Path B 保活（非阻塞）
+                try:
+                    interval = int(
+                        cfg.get("keepalive_interval")
+                        or cfg.get("account_keepalive_interval")
+                        or 300
+                    )
+                except (TypeError, ValueError):
+                    interval = 300
+                r = acc.start_keepalive(
+                    instance_id=str(cfg.get("instance_id") or ""),
+                    machine_id=str(cfg.get("machine_id") or ""),
+                    interval=interval,
+                )
+                if isinstance(r, dict) and r.get("ok"):
+                    resumed += 1
+                    acc.log("INFO", "WebUI 重启：已自动恢复保活", to_global=True)
+                else:
+                    acc.log(
+                        "WARN",
+                        f"WebUI 重启：自动恢复保活未启动: {r.get('error') if isinstance(r, dict) else r}",
+                        to_global=True,
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.warning("resume keepalive failed for %s: %s", getattr(acc, "id", "?"), e)
+        return resumed
 
     def create(self, label: str = "", username: str = "", password: str = "") -> dict:
         label = (label or username or "账号").strip()
