@@ -16,6 +16,8 @@
 """
 import logging
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 import config
 from ecloud_client import EcloudHttpUtil, EcloudError
@@ -23,25 +25,36 @@ from ecloud_client import EcloudHttpUtil, EcloudError
 log = logging.getLogger("keepalive")
 
 
-def keepalive_once(http: EcloudHttpUtil):
-    """执行一次保活。
+@dataclass
+class KeepaliveOutcome:
+    """一轮保活的结果 + 真实服务端错误（供 CLI/WebUI 打可诊断日志）。
 
-    返回:
-      True  — 至少一个调用成功（健康）
-      False — 检测到 token 失效，需要重新登录
-      None  — 本轮全部失败但均为非 token 错误（服务端瞬时/5xx），
-              不应触发密码重登，下一轮重试即可
+    ok:  True  = 至少一个接口成功（健康）
+         False = 检测到 token 失效，需要重新登录
+         None  = 本轮全部失败但均为非 token 错误（服务端瞬时/5xx），不应重登
+    error: 触发 False/None 的真实服务端报错 "[code] message"（成功为空）；
+           来自服务端返回，不含 token/密码，可安全展示到日志/界面。
     """
+
+    ok: Optional[bool]
+    error: str = ""
+
+
+def keepalive_probe(http: EcloudHttpUtil) -> KeepaliveOutcome:
+    """执行一次保活并返回结果 + 真实错误（供 CLI/WebUI 打可诊断日志）。"""
     success = False
+    last_err = ""
     # 1. 用户信息
     try:
         info = http.post(config.Endpoint.USER_GET_INFO)
         log.debug("USER_GET_INFO ok: %s", _brief(info))
         success = True
     except EcloudError as e:
-        log.warning("USER_GET_INFO failed: %s", e)
+        detail = f"[{e.code}] {e.message}"
+        log.warning("USER_GET_INFO failed: %s", detail)
         if _is_token_expired(e):
-            return False
+            return KeepaliveOutcome(ok=False, error=detail)
+        last_err = detail
 
     # 2. 桌面列表
     try:
@@ -49,20 +62,32 @@ def keepalive_once(http: EcloudHttpUtil):
         log.debug("USER_GET_DEVICE_INFO ok: %s", _brief(devs))
         success = True
     except EcloudError as e:
-        log.warning("USER_GET_DEVICE_INFO failed: %s", e)
+        detail = f"[{e.code}] {e.message}"
+        log.warning("USER_GET_DEVICE_INFO failed: %s", detail)
         if _is_token_expired(e):
-            return False
+            return KeepaliveOutcome(ok=False, error=detail)
+        last_err = detail
 
-    # 3. 探针上报（模拟一条登录探针事件）
+    # 3. 探针上报（模拟一条登录探针事件；失败不影响保活判定）
     try:
         _push_probe(http)
         success = True
     except EcloudError as e:
-        log.warning("PROBE_QKK_BATCHPUSH failed: %s", e)
-        # 探针失败不影响保活判定
-    # token 失效已在上面 early-return False；此处 success=False 只意味着本轮
-    # 全是非 token 错误（瞬时/服务端故障）→ 返回 None，避免误触发密码重登风暴。
-    return True if success else None
+        detail = f"[{e.code}] {e.message}"
+        log.warning("PROBE_QKK_BATCHPUSH failed: %s", detail)
+        if not last_err:
+            last_err = detail
+
+    if success:
+        return KeepaliveOutcome(ok=True)
+    # token 失效已在上面 early-return；此处 success=False 只意味着本轮全是非
+    # token 错误（瞬时/服务端故障）→ None，避免误触发密码重登风暴。
+    return KeepaliveOutcome(ok=None, error=last_err)
+
+
+def keepalive_once(http: EcloudHttpUtil):
+    """三态兼容包装（True/False/None）。新代码请用 keepalive_probe 拿真实错误。"""
+    return keepalive_probe(http).ok
 
 
 def _push_probe(http: EcloudHttpUtil) -> None:
@@ -116,11 +141,15 @@ def run_keepalive_loop(http: EcloudHttpUtil,
     while max_rounds is None or rounds < max_rounds:
         rounds += 1
         try:
-            alive = keepalive_once(http)
-            if alive is True:
+            outcome = keepalive_probe(http)
+            if outcome.ok is True:
                 log.info("[%d] 保活成功 ✓", rounds)
-            elif alive is False:
-                log.warning("[%d] token 可能失效，尝试重新登录...", rounds)
+            elif outcome.ok is False:
+                # 打出服务端真实报错，便于判断是真失效还是被误判
+                log.warning(
+                    "[%d] token 失效（服务端返回: %s），重新登录...",
+                    rounds, outcome.error or "无详情",
+                )
                 token = relogin_fn()
                 if token:
                     http.set_token(token)
@@ -129,7 +158,10 @@ def run_keepalive_loop(http: EcloudHttpUtil,
                     log.error("[%d] 重新登录失败", rounds)
             else:
                 # None: 本轮全部为非 token 错误（服务端瞬时/5xx）——不重登，下轮重试
-                log.warning("[%d] 本轮请求失败（非 token 错误），跳过重登，下轮重试", rounds)
+                log.warning(
+                    "[%d] 本轮请求失败（非 token 错误: %s），跳过重登，下轮重试",
+                    rounds, outcome.error or "无详情",
+                )
         except Exception as e:
             log.exception("[%d] 保活异常: %s", rounds, e)
         if max_rounds is None or rounds < max_rounds:

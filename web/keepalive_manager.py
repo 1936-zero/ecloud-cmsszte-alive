@@ -323,20 +323,26 @@ class AccountKeepaliveManager:
                 self._rounds += 1
                 current_round = self._rounds
             try:
-                ok = account_keepalive.keepalive_once(http)
-                if ok is True:
+                outcome = account_keepalive.keepalive_probe(http)
+                if outcome.ok is True:
                     self._record_success()
                     self._log("INFO", f"[{current_round}] 账号保活成功")
-                elif ok is None:
+                elif outcome.ok is None:
                     # None = 本轮全部失败但均非 token 错误（服务端 5xx / 瞬时抖动）。
                     # 只重试下一轮，不做密码重登，避免故障期的密码重登风暴。真正的
-                    # token 失效由 keepalive_once 返回 False，仍走下面的重登分支。
-                    detail = "本轮请求失败（非token错误），下轮重试"
+                    # token 失效由 keepalive_probe 返回 ok=False，仍走下面的重登分支。
+                    detail = (
+                        f"本轮请求失败（非token错误: "
+                        f"{_safe_public_err(outcome.error) or '无详情'}），下轮重试"
+                    )
                     self._record_error(detail)
                     self._log("WARN", f"[{current_round}] {detail}")
                 else:
-                    # ok is False → token 真失效：重新登录并刷新 token
-                    detail = "token失效，需重新登录"
+                    # outcome.ok is False → token 真失效：带上服务端真实报错，重登刷新 token
+                    detail = (
+                        f"token失效，需重新登录（服务端返回: "
+                        f"{_safe_public_err(outcome.error) or '无详情'}）"
+                    )
                     self._record_error(detail)
                     self._log("WARN", f"[{current_round}] 账号保活失败: {detail}")
                     if relogin_fn:
@@ -346,7 +352,7 @@ class AccountKeepaliveManager:
                                 http.set_token(token)
                                 self._log("INFO", "重新登录成功，立即重试账号保活")
                                 try:
-                                    ok2 = account_keepalive.keepalive_once(http)
+                                    ok2 = account_keepalive.keepalive_probe(http).ok
                                     if ok2:
                                         self._record_success()
                                         self._log("INFO", f"[{current_round}] 重登后账号保活成功")
