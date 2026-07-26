@@ -131,6 +131,20 @@ class TestKeepaliveTristate(unittest.TestCase):
             raise EcloudError({"errorCode": "502", "errorMessage": "upstream 502 bad gateway"})
         self.assertIsNone(keepalive.keepalive_once(self._http(se)))
 
+    def test_probe_carries_real_error(self):
+        """keepalive_probe surfaces the actual server error for diagnosable logs."""
+        def se_token(ep, *a, **k):
+            raise EcloudError({"errorCode": "401", "errorMessage": "登录已过期"})
+        out = keepalive.keepalive_probe(self._http(se_token))
+        self.assertIs(out.ok, False)
+        self.assertIn("401", out.error)
+
+        def se_500(ep, *a, **k):
+            raise EcloudError({"errorCode": "502", "errorMessage": "bad gateway"})
+        out2 = keepalive.keepalive_probe(self._http(se_500))
+        self.assertIsNone(out2.ok)
+        self.assertIn("502", out2.error)
+
 
 class TestRedqBareSpki(unittest.TestCase):
     """MED: encrypt_with_redq_spki must accept a raw SPKI (0x30 0x82 ...)."""

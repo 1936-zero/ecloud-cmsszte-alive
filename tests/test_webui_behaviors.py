@@ -10,6 +10,7 @@ import desktop_list
 import desktop_session
 import login
 from ecloud_client import EcloudError
+from keepalive import KeepaliveOutcome
 from web import server
 from web.keepalive_manager import AccountKeepaliveManager, KeepaliveManager
 
@@ -267,11 +268,11 @@ class AccountKeepaliveManagerTests(unittest.TestCase):
         manager._running = True
         fake_http = Mock()
 
-        with patch("web.keepalive_manager.account_keepalive.keepalive_once", return_value=True) as keepalive_once, \
+        with patch("web.keepalive_manager.account_keepalive.keepalive_probe", return_value=KeepaliveOutcome(ok=True)) as keepalive_probe, \
              patch("web.keepalive_manager.time.sleep", side_effect=lambda _seconds: manager._stop_event.set()):
             manager._run(fake_http, 1, relogin_fn=None)
 
-        keepalive_once.assert_called_once_with(fake_http)
+        keepalive_probe.assert_called_once_with(fake_http)
         self.assertEqual(manager._last_error, "")
         self.assertEqual(manager._consecutive_errors, 0)
         self.assertIsNotNone(manager._last_success_at)
@@ -282,11 +283,11 @@ class AccountKeepaliveManagerTests(unittest.TestCase):
         fake_http = Mock()
         relogin = Mock(return_value="fresh-token")
 
-        with patch("web.keepalive_manager.account_keepalive.keepalive_once", side_effect=[False, True]) as keepalive_once, \
+        with patch("web.keepalive_manager.account_keepalive.keepalive_probe", side_effect=[KeepaliveOutcome(ok=False, error="[401] token失效"), KeepaliveOutcome(ok=True)]) as keepalive_probe, \
              patch("web.keepalive_manager.time.sleep", side_effect=lambda _seconds: manager._stop_event.set()):
             manager._run(fake_http, 1, relogin)
 
-        self.assertEqual(keepalive_once.call_count, 2)
+        self.assertEqual(keepalive_probe.call_count, 2)
         relogin.assert_called_once()
         fake_http.set_token.assert_called_once_with("fresh-token")
         self.assertEqual(manager._last_error, "")

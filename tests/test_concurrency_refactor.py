@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from keepalive import KeepaliveOutcome
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -124,19 +126,21 @@ class TestWebUiKeepaliveTristate(unittest.TestCase):
         return m
 
     def test_transient_none_does_not_relogin(self):
-        """None (all-fail, non-token) -> retry next round, NO password relogin."""
+        """None (all-fail, non-token) -> retry next round, NO password relogin;
+        the real server error is surfaced into the account log."""
         m = self._manager()
         relogin = Mock(return_value="tok")
         with patch(
-            "web.keepalive_manager.account_keepalive.keepalive_once",
-            return_value=None,
-        ) as ka_once, patch(
+            "web.keepalive_manager.account_keepalive.keepalive_probe",
+            return_value=KeepaliveOutcome(ok=None, error="[502] bad gateway"),
+        ) as ka_probe, patch(
             "web.keepalive_manager.time.sleep",
             side_effect=lambda _s: m._stop_event.set(),
         ):
             m._run(Mock(), 1, relogin)
-        ka_once.assert_called_once()
+        ka_probe.assert_called_once()
         relogin.assert_not_called()
+        self.assertIn("502", m._last_error)  # real error surfaced, not generic
 
     def test_token_expiry_false_still_relogins(self):
         """False (real token expiry) -> relogin + refresh token, then retry."""
@@ -144,14 +148,14 @@ class TestWebUiKeepaliveTristate(unittest.TestCase):
         fake_http = Mock()
         relogin = Mock(return_value="fresh-token")
         with patch(
-            "web.keepalive_manager.account_keepalive.keepalive_once",
-            side_effect=[False, True],
-        ) as ka_once, patch(
+            "web.keepalive_manager.account_keepalive.keepalive_probe",
+            side_effect=[KeepaliveOutcome(ok=False, error="[401] 登录已过期"), KeepaliveOutcome(ok=True)],
+        ) as ka_probe, patch(
             "web.keepalive_manager.time.sleep",
             side_effect=lambda _s: m._stop_event.set(),
         ):
             m._run(fake_http, 1, relogin)
-        self.assertEqual(ka_once.call_count, 2)
+        self.assertEqual(ka_probe.call_count, 2)
         relogin.assert_called_once()
         fake_http.set_token.assert_called_once_with("fresh-token")
 
